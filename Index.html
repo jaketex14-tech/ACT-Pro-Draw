@@ -1,0 +1,3580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0f172a" />
+  <title>ProDraw Blueprints — Construction Drawing Viewer</title>
+
+  <!-- Google Fonts: Inter & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet" />
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace']
+          }
+        }
+      }
+    };
+  </script>
+
+  <!-- PDF.js v3.11.174 -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <!-- pdf-lib v1.17.1 -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      overscroll-behavior: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* Crisp light-gray drafting table workspace canvas */
+    .drafting-canvas-bg {
+      background-color: #e2e8f0;
+      background-image:
+        linear-gradient(to right, rgba(15, 23, 42, 0.05) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(15, 23, 42, 0.05) 1px, transparent 1px);
+      background-size: 24px 24px;
+    }
+
+    /* Procore-style translucent blue/amber callout hotspots */
+    .callout-hotspot {
+      position: absolute;
+      background-color: rgba(2, 132, 199, 0.20);
+      border: 2px solid rgba(2, 132, 199, 0.92);
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.65) inset, 0 2px 6px rgba(2, 132, 199, 0.25);
+      transition: background-color 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+      cursor: pointer;
+      pointer-events: auto;
+      user-select: none;
+    }
+
+    .callout-hotspot:hover {
+      background-color: rgba(245, 158, 11, 0.28);
+      border-color: #d97706;
+      box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.35), 0 4px 12px rgba(217, 119, 6, 0.35);
+      z-index: 25;
+    }
+
+    .callout-hotspot.shape-circle {
+      border-radius: 9999px;
+    }
+
+    .callout-hotspot.shape-rect {
+      border-radius: 5px;
+    }
+
+    .callout-hotspot.link-tool-active {
+      background-color: rgba(245, 158, 11, 0.24);
+      border: 2px dashed #d97706;
+    }
+
+    /* Rubber-band selection box while drawing a new callout link */
+    .draw-selection-box {
+      position: absolute;
+      background-color: rgba(245, 158, 11, 0.25);
+      border: 2px dashed #d97706;
+      pointer-events: none;
+      z-index: 30;
+    }
+
+    @keyframes sheetJumpHighlight {
+      0% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.8); }
+      70% { box-shadow: 0 0 0 10px rgba(245, 158, 11, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
+    }
+
+    .sheet-jump-pulse {
+      animation: sheetJumpHighlight 1.1s ease-out;
+    }
+
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #94a3b8;
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #64748b;
+    }
+  </style>
+</head>
+<body class="bg-slate-200 text-slate-900 font-sans flex flex-col h-screen select-none">
+
+  <!-- ===================================================================== -->
+  <!-- TOP DARK CONSTRUCTION HEADER & DROPBOX / OFFLINE STATUS BAR           -->
+  <!-- ===================================================================== -->
+  <header class="bg-slate-900 text-white border-b border-slate-800 px-3 py-2 flex items-center justify-between gap-2 z-30 shrink-0">
+    <!-- Left: Brand + Sidebar Toggle + Sample Set Quick Action -->
+    <div class="flex items-center gap-2 min-w-0">
+      <button id="toggleSidebarBtn" title="Toggle Navigation Drawer"
+        class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition shrink-0">
+        <i data-lucide="panel-left" class="w-4 h-4"></i>
+      </button>
+
+      <div class="flex items-center gap-2 shrink-0">
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center shadow-sm">
+          <i data-lucide="drafting-compass" class="w-5 h-5 text-slate-950"></i>
+        </div>
+        <div class="leading-tight hidden sm:block">
+          <div class="font-bold text-sm tracking-tight flex items-center gap-1.5">
+            <span>ProDraw Blueprints</span>
+            <span class="text-[10px] font-mono uppercase px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40">Field</span>
+          </div>
+          <div class="text-[11px] text-slate-400">Drawings &amp; Cross-Sheet Callouts</div>
+        </div>
+      </div>
+
+      <div class="h-6 w-px bg-slate-700 hidden md:block mx-1"></div>
+
+      <!-- Load Sample Construction Set Button -->
+      <button id="loadSampleSetBtn" title="Generate & Load 4-Sheet Commercial Sample Blueprint Set"
+        class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/40 transition shrink-0">
+        <i data-lucide="layers" class="w-3.5 h-3.5 text-amber-400"></i>
+        <span class="hidden lg:inline">Load Sample Construction Set</span>
+        <span class="lg:hidden">Sample Set</span>
+      </button>
+    </div>
+
+    <!-- Right: Network Pill, Offline Storage Pill, Dropbox Account Status & Actions -->
+    <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
+      <!-- Live Online / Offline Status -->
+      <div id="networkStatusPill"
+        class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-950/90 text-emerald-300 border border-emerald-700/60">
+        <span id="networkStatusDot" class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span id="networkStatusLabel" class="hidden md:inline">Online</span>
+      </div>
+
+      <!-- Offline IndexedDB Storage Badge -->
+      <button id="headerOfflineBadgeBtn" title="View Offline IndexedDB Library"
+        class="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition">
+        <i data-lucide="hard-drive" class="w-3.5 h-3.5 text-emerald-400"></i>
+        <span id="headerStorageText" class="font-mono text-[11px]">0.0 MB</span>
+      </button>
+
+      <!-- Dropbox Connected Account Status / Connect / Test / Disconnect -->
+      <div class="flex items-center rounded-lg bg-slate-800 border border-slate-700 overflow-hidden">
+        <button id="openDropboxAuthBtn" title="Configure or Connect Dropbox Read-Only Access"
+          class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold hover:bg-slate-700 transition">
+          <span id="dbxHeaderDot" class="w-2 h-2 rounded-full bg-slate-400"></span>
+          <i data-lucide="cloud" class="w-3.5 h-3.5 text-sky-400"></i>
+          <span id="dbxHeaderAccountLabel" class="max-w-[130px] sm:max-w-[180px] truncate text-slate-200">Connect Dropbox</span>
+        </button>
+
+        <button id="dbxTestConnBtn" title="Test Live Dropbox Read-Only Connection"
+          class="hidden px-2 py-1.5 text-[11px] font-semibold text-sky-300 hover:bg-slate-700 border-l border-slate-700 transition">
+          Test
+        </button>
+
+        <button id="dbxHeaderDisconnectBtn" title="Disconnect Dropbox Account"
+          class="hidden px-2 py-1.5 text-[11px] font-semibold text-rose-300 hover:bg-rose-950/60 border-l border-slate-700 transition">
+          <i data-lucide="log-out" class="w-3.5 h-3.5"></i>
+        </button>
+      </div>
+
+      <!-- Local PDF Import Button -->
+      <button id="importLocalPdfBtn" title="Import Local PDF Blueprint(s)"
+        class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-500 text-white transition">
+        <i data-lucide="file-up" class="w-3.5 h-3.5"></i>
+        <span class="hidden md:inline">Open PDF</span>
+      </button>
+      <input id="localPdfFileInput" type="file" accept="application/pdf" multiple class="hidden" />
+    </div>
+  </header>
+
+  <!-- ===================================================================== -->
+  <!-- SECONDARY VIEWER ACTION TOOLBAR (SHEET SWITCHER, LINK TOOL, ZOOM)     -->
+  <!-- ===================================================================== -->
+  <div class="bg-slate-800 text-slate-100 border-b border-slate-700 px-3 py-1.5 flex items-center justify-between gap-2 flex-wrap z-20 shrink-0">
+    <!-- Left: Active Blueprint Title + Page Selector + Save Offline -->
+    <div class="flex items-center gap-2 min-w-0">
+      <div id="activeDocBadge" class="flex items-center gap-2 bg-slate-900/90 border border-slate-700 rounded-lg px-2.5 py-1 min-w-0">
+        <span id="activeSourceTag" class="text-[10px] font-mono uppercase px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 shrink-0">
+          SAMPLE
+        </span>
+        <span id="activeDocTitle" class="text-xs font-semibold text-white truncate max-w-[140px] sm:max-w-[230px]">
+          Commercial Sample Set
+        </span>
+      </div>
+
+      <!-- Page Dropdown Switcher -->
+      <div class="flex items-center gap-1 bg-slate-900/90 border border-slate-700 rounded-lg p-0.5">
+        <button id="prevPageBtn" title="Previous Sheet/Page"
+          class="p-1 rounded hover:bg-slate-700 text-slate-300 disabled:opacity-35 transition">
+          <i data-lucide="chevron-left" class="w-3.5 h-3.5"></i>
+        </button>
+        <select id="pageSelectDropdown" aria-label="Select Blueprint Page"
+          class="bg-transparent text-xs font-mono font-semibold text-white px-1.5 py-0.5 focus:outline-none max-w-[160px] sm:max-w-[240px] truncate cursor-pointer">
+          <option value="1">Page 1</option>
+        </select>
+        <button id="nextPageBtn" title="Next Sheet/Page"
+          class="p-1 rounded hover:bg-slate-700 text-slate-300 disabled:opacity-35 transition">
+          <i data-lucide="chevron-right" class="w-3.5 h-3.5"></i>
+        </button>
+      </div>
+
+      <!-- Save Active Blueprint Offline Button -->
+      <button id="saveCurrentOfflineBtn" title="Save Active Blueprint PDF to IndexedDB for Offline Viewing"
+        class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-700 hover:bg-slate-600 text-slate-100 border border-slate-600 transition shrink-0">
+        <i id="saveCurrentOfflineIcon" data-lucide="download-cloud" class="w-3.5 h-3.5 text-emerald-400"></i>
+        <span id="saveCurrentOfflineLabel" class="hidden xl:inline">Offline Ready</span>
+      </button>
+    </div>
+
+    <!-- Center: Procore Callout Link Tools + JSON Export/Import -->
+    <div class="flex items-center gap-1.5 flex-wrap">
+      <!-- Toggle Link Tool (Draw Callout) -->
+      <button id="toggleLinkToolBtn"
+        class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-700 hover:bg-slate-600 text-slate-100 border border-slate-600 transition">
+        <i data-lucide="link-2" class="w-3.5 h-3.5 text-amber-400"></i>
+        <span>Link Tool (Draw Callout)</span>
+      </button>
+
+      <!-- Show/Hide Callouts Toggle -->
+      <button id="toggleShowLinksBtn" title="Toggle Callout Overlays Visibility"
+        class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-900/80 hover:bg-slate-700 text-slate-200 border border-slate-700 transition">
+        <i id="showLinksEyeIcon" data-lucide="eye" class="w-3.5 h-3.5 text-sky-400"></i>
+        <span id="activePageLinkCount" class="font-mono text-[11px] text-sky-300">0</span>
+      </button>
+
+      <!-- Export / Import Links JSON -->
+      <div class="hidden md:flex items-center gap-1">
+        <button id="exportLinksBtn" title="Export Cross-Sheet Callout Links (.json)"
+          class="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-900/80 hover:bg-slate-700 text-slate-300 border border-slate-700 transition">
+          <i data-lucide="download" class="w-3.5 h-3.5 text-slate-400"></i>
+          <span>Export Links (.json)</span>
+        </button>
+        <button id="importLinksBtn" title="Import Cross-Sheet Callout Links (.json)"
+          class="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-900/80 hover:bg-slate-700 text-slate-300 border border-slate-700 transition">
+          <i data-lucide="upload" class="w-3.5 h-3.5 text-slate-400"></i>
+          <span>Import Links (.json)</span>
+        </button>
+        <input id="importLinksFileInput" type="file" accept="application/json" class="hidden" />
+      </div>
+    </div>
+
+    <!-- Right: High-DPI Zoom Controls (+, -, Fit Width, Fit Page, Reset 100%) -->
+    <div class="flex items-center gap-1 bg-slate-900/90 border border-slate-700 rounded-lg p-0.5">
+      <button id="zoomOutBtn" title="Zoom Out (-)"
+        class="p-1.5 rounded hover:bg-slate-700 text-slate-300 transition">
+        <i data-lucide="minus" class="w-3.5 h-3.5"></i>
+      </button>
+      <span id="zoomLevelText" class="font-mono text-xs font-semibold text-amber-300 px-1.5 min-w-[46px] text-center">
+        100%
+      </span>
+      <button id="zoomInBtn" title="Zoom In (+)"
+        class="p-1.5 rounded hover:bg-slate-700 text-slate-300 transition">
+        <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+      </button>
+      <div class="h-4 w-px bg-slate-700 mx-0.5"></div>
+      <button id="fitWidthBtn" title="Fit Sheet Width (W)"
+        class="px-2 py-1 rounded hover:bg-slate-700 text-[11px] font-semibold text-slate-200 transition hidden sm:inline-block">
+        Fit Width
+      </button>
+      <button id="fitPageBtn" title="Fit Entire Sheet (0)"
+        class="px-2 py-1 rounded hover:bg-slate-700 text-[11px] font-semibold text-slate-200 transition">
+        Fit Page
+      </button>
+      <button id="resetZoom100Btn" title="Reset Zoom to 100% (1)"
+        class="px-2 py-1 rounded hover:bg-slate-700 text-[11px] font-mono font-semibold text-slate-300 transition hidden md:inline-block">
+        100%
+      </button>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- MAIN WORKSPACE: SIDEBAR DRAWER + HIGH-DPI BLUEPRINT CANVAS            -->
+  <!-- ===================================================================== -->
+  <div class="flex-1 flex min-h-0 relative overflow-hidden">
+
+    <!-- Mobile Backdrop -->
+    <div id="sidebarBackdrop" class="hidden fixed inset-0 bg-slate-950/60 z-20 md:hidden"></div>
+
+    <!-- Responsive Sidebar Drawer (Dropbox Browser / Offline Library / Sheet Links) -->
+    <aside id="appSidebar"
+      class="w-80 sm:w-88 bg-slate-900 text-slate-100 border-r border-slate-800 flex flex-col shrink-0 z-20 fixed md:static inset-y-0 left-0 h-full transition-transform duration-200 ease-out shadow-2xl md:shadow-none">
+
+      <!-- 3-Tab Switcher -->
+      <div class="p-2 bg-slate-950 border-b border-slate-800 grid grid-cols-3 gap-1 shrink-0">
+        <button data-tab="dropbox" class="sidebar-tab-btn py-1.5 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 bg-sky-600 text-white transition">
+          <i data-lucide="cloud" class="w-3.5 h-3.5"></i>
+          <span>Dropbox</span>
+        </button>
+        <button data-tab="offline" class="sidebar-tab-btn py-1.5 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 text-slate-400 hover:text-white hover:bg-slate-800 transition">
+          <i data-lucide="hard-drive" class="w-3.5 h-3.5"></i>
+          <span>Offline</span>
+          <span id="offlineTabCount" class="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-slate-800 text-emerald-400">0</span>
+        </button>
+        <button data-tab="links" class="sidebar-tab-btn py-1.5 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 text-slate-400 hover:text-white hover:bg-slate-800 transition">
+          <i data-lucide="link-2" class="w-3.5 h-3.5"></i>
+          <span>Links</span>
+          <span id="linksTabCount" class="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-slate-800 text-amber-400">0</span>
+        </button>
+      </div>
+
+      <!-- TAB 1: DROPBOX READ-ONLY BROWSER -->
+      <div id="tabPanelDropbox" class="flex-1 flex flex-col min-h-0">
+        <!-- Folder Breadcrumbs & Save Folder Offline -->
+        <div class="p-2.5 bg-slate-900 border-b border-slate-800 space-y-2 shrink-0">
+          <div class="flex items-center justify-between gap-1">
+            <div id="dbxBreadcrumbs" class="flex items-center gap-1 text-xs font-medium text-slate-300 overflow-x-auto py-0.5">
+              <button data-path="" class="hover:text-white font-semibold">Dropbox</button>
+            </div>
+            <button id="dbxRefreshBtn" title="Refresh Current Dropbox Folder"
+              class="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 shrink-0">
+              <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+            </button>
+          </div>
+
+          <!-- Search & PDF Filter -->
+          <div class="flex items-center gap-1.5">
+            <div class="relative flex-1">
+              <i data-lucide="search" class="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2"></i>
+              <input id="dbxSearchInput" type="text" placeholder="Search Dropbox folder..."
+                class="w-full pl-8 pr-2.5 py-1.5 text-xs bg-slate-800 border border-slate-700 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500" />
+            </div>
+            <button id="dbxPdfOnlyToggle" title="Show PDFs & Folders Only"
+              class="px-2 py-1.5 rounded-lg text-[11px] font-mono font-semibold bg-sky-500/20 text-sky-300 border border-sky-500/40 shrink-0">
+              .PDF
+            </button>
+          </div>
+
+          <!-- Save All PDFs in Folder Offline Action -->
+          <button id="dbxSaveAllFolderOfflineBtn"
+            class="hidden w-full py-1.5 px-2.5 rounded-lg bg-emerald-950/80 hover:bg-emerald-900/80 text-emerald-300 border border-emerald-700/60 text-xs font-semibold flex items-center justify-center gap-1.5 transition">
+            <i data-lucide="download-cloud" class="w-3.5 h-3.5"></i>
+            <span id="dbxSaveAllFolderText">Save All PDFs in Folder Offline</span>
+          </button>
+        </div>
+
+        <!-- Dropbox Folder Entries List -->
+        <div id="dbxBrowserList" class="flex-1 overflow-y-auto p-2 space-y-1.5">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+
+      <!-- TAB 2: OFFLINE LIBRARY (INDEXEDDB) -->
+      <div id="tabPanelOffline" class="hidden flex-1 flex flex-col min-h-0">
+        <div class="p-2.5 bg-slate-900 border-b border-slate-800 flex items-center justify-between shrink-0">
+          <div>
+            <div class="text-xs font-bold text-white">Offline Blueprints (IndexedDB)</div>
+            <div id="offlinePanelQuotaText" class="text-[11px] text-slate-400 font-mono">0 files • 0.0 MB cached</div>
+          </div>
+          <button id="offlinePanelImportBtn"
+            class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-sky-300 border border-slate-700 flex items-center gap-1">
+            <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+            <span>Add PDF</span>
+          </button>
+        </div>
+
+        <div id="offlineLibraryList" class="flex-1 overflow-y-auto p-2 space-y-1.5">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+
+      <!-- TAB 3: SHEET CALLOUT LINKS DIRECTORY -->
+      <div id="tabPanelLinks" class="hidden flex-1 flex flex-col min-h-0">
+        <div class="p-2.5 bg-slate-900 border-b border-slate-800 space-y-2 shrink-0">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold text-white">Cross-Sheet Callouts</span>
+            <div class="flex items-center gap-1">
+              <button id="sidebarExportLinksBtn" title="Export Links JSON"
+                class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[11px] font-medium text-slate-300 border border-slate-700">
+                Export
+              </button>
+              <button id="sidebarImportLinksBtn" title="Import Links JSON"
+                class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[11px] font-medium text-slate-300 border border-slate-700">
+                Import
+              </button>
+            </div>
+          </div>
+          <p class="text-[11px] text-slate-400 leading-snug">
+            Click any callout below or on the blueprint to jump directly to the referenced sheet.
+          </p>
+        </div>
+
+        <div id="sheetLinksDirectoryList" class="flex-1 overflow-y-auto p-2 space-y-1.5">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+
+      <!-- Multi-Page Thumbnail Strip at Bottom of Sidebar -->
+      <div class="p-2 bg-slate-950 border-t border-slate-800 shrink-0">
+        <div class="flex items-center justify-between mb-1.5 px-1">
+          <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Active Document Sheets</span>
+          <span id="sidebarPageCounter" class="text-[10px] font-mono text-slate-400">1 / 4</span>
+        </div>
+        <div id="pageThumbnailsStrip" class="flex items-center gap-1.5 overflow-x-auto pb-1">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Blueprint Viewport -->
+    <main id="blueprintViewport"
+      class="flex-1 relative overflow-hidden drafting-canvas-bg touch-none cursor-grab">
+
+      <!-- Prominent Procore Navigation History Back Button -->
+      <button id="navHistoryBackBtn"
+        class="hidden absolute top-3 left-3 z-20 flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-900/95 hover:bg-slate-800 text-amber-300 text-xs font-bold shadow-xl border border-amber-500/50 backdrop-blur-xs transition transform hover:-translate-y-0.5">
+        <i data-lucide="arrow-left" class="w-4 h-4 text-amber-400"></i>
+        <span id="navHistoryBackText">← Back to Sheet</span>
+      </button>
+
+      <!-- Active Link Drawing Tool Instruction Banner -->
+      <div id="drawToolBanner"
+        class="hidden absolute top-3 right-3 z-20 flex items-center gap-2 px-3.5 py-2 rounded-xl bg-amber-500 text-slate-950 text-xs font-bold shadow-xl">
+        <i data-lucide="crosshair" class="w-4 h-4 shrink-0"></i>
+        <span>Link Tool Active: Click &amp; drag over any detail bubble to create a callout link</span>
+        <button id="exitDrawToolBannerBtn" class="ml-1 px-1.5 py-0.5 rounded bg-slate-900 text-white text-[10px]">ESC</button>
+      </div>
+
+      <!-- Loading Overlay -->
+      <div id="viewerLoadingOverlay"
+        class="hidden absolute inset-0 z-30 bg-slate-900/65 backdrop-blur-xs flex flex-col items-center justify-center text-white gap-3">
+        <div class="w-10 h-10 border-3 border-amber-400 border-t-transparent rounded-full animate-spin"></div>
+        <div id="viewerLoadingLabel" class="text-xs font-semibold tracking-wide">Rendering high-DPI blueprint...</div>
+      </div>
+
+      <!-- GPU-Accelerated Sheet Stage -->
+      <div id="sheetStage" class="absolute top-0 left-0 origin-top-left will-change-transform shadow-2xl bg-white ring-1 ring-slate-900/15">
+        <canvas id="blueprintCanvas" class="block pointer-events-none"></canvas>
+        <div id="calloutOverlayContainer" class="absolute inset-0 overflow-hidden"></div>
+        <div id="rubberBandDrawBox" class="draw-selection-box hidden"></div>
+      </div>
+
+      <!-- Crisp Callout Hover Tooltip -->
+      <div id="calloutHoverTooltip"
+        class="hidden fixed z-40 pointer-events-none max-w-xs rounded-xl bg-slate-900/95 text-white p-2.5 shadow-2xl border border-slate-700 text-xs">
+        <div class="flex items-center justify-between gap-2 mb-0.5">
+          <span id="tipCalloutLabel" class="font-bold text-amber-300">3 / S201</span>
+          <span class="text-[10px] font-mono uppercase px-1.5 py-0.2 rounded bg-sky-500/20 text-sky-300 border border-sky-500/30">Open Sheet</span>
+        </div>
+        <div id="tipTargetInfo" class="text-[11px] text-slate-300 truncate">Target: Sample Set • Page 3</div>
+      </div>
+
+      <!-- Bottom-Right Coordinate & DPI Telemetry Pill -->
+      <div class="hidden sm:flex items-center gap-2.5 absolute bottom-3 right-3 z-10 px-3 py-1.5 rounded-xl bg-slate-900/90 text-slate-300 text-[11px] font-mono border border-slate-700 pointer-events-none">
+        <span id="telemetrySheetSize">36" × 24"</span>
+        <span class="text-slate-600">|</span>
+        <span id="telemetryCoords">X: 50% Y: 50%</span>
+        <span class="text-slate-600">|</span>
+        <span class="text-emerald-400">Hi-DPI Vector</span>
+      </div>
+    </main>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- MODAL 1: DUAL-MODE DROPBOX READ-ONLY OAUTH 2.0 PKCE CONNECTION        -->
+  <!-- ===================================================================== -->
+  <div id="dropboxAuthModal" class="hidden fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-xl overflow-hidden flex flex-col max-h-[90vh]">
+      <!-- Modal Header -->
+      <div class="px-4 py-3 bg-slate-900 text-white flex items-center justify-between shrink-0">
+        <div class="flex items-center gap-2">
+          <i data-lucide="cloud" class="w-4 h-4 text-sky-400"></i>
+          <h3 class="font-bold text-sm">Dropbox Read-Only OAuth 2.0 PKCE Connection</h3>
+        </div>
+        <button id="closeDbxAuthModalBtn" class="text-slate-400 hover:text-white p-1 rounded-lg">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <div class="p-4 space-y-3.5 text-xs overflow-y-auto">
+        <!-- Connected Status Banner -->
+        <div id="dbxAuthStatusCard" class="p-3 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-between gap-2">
+          <div class="flex items-center gap-2.5 min-w-0">
+            <span id="dbxModalStatusDot" class="w-2.5 h-2.5 rounded-full bg-slate-400 shrink-0"></span>
+            <div class="min-w-0">
+              <div id="dbxModalStatusHeading" class="font-bold text-slate-900 truncate">Not Connected</div>
+              <div id="dbxModalStatusDetail" class="text-[11px] text-slate-500 truncate">
+                Read-only scopes: files.metadata.read files.content.read (offline refresh enabled)
+              </div>
+            </div>
+          </div>
+          <div class="flex items-center gap-1.5 shrink-0">
+            <button id="dbxModalTestBtn" class="hidden px-2.5 py-1 rounded-lg bg-sky-100 hover:bg-sky-200 text-sky-800 font-semibold">
+              Test
+            </button>
+            <button id="dbxModalDisconnectBtn" class="hidden px-2.5 py-1 rounded-lg bg-rose-100 hover:bg-rose-200 text-rose-800 font-semibold">
+              Disconnect
+            </button>
+          </div>
+        </div>
+
+        <!-- Inline Error Alert Banner (Hidden unless an error occurs) -->
+        <div id="dbxAuthErrorBox" class="hidden p-3 rounded-xl bg-rose-50 border border-rose-300 text-rose-900 space-y-1">
+          <div class="font-bold flex items-center gap-1.5">
+            <i data-lucide="alert-circle" class="w-4 h-4 text-rose-600 shrink-0"></i>
+            <span>Dropbox Authorization Error</span>
+          </div>
+          <div id="dbxAuthErrorMessage" class="text-[11px] font-mono break-words"></div>
+        </div>
+
+        <!-- Client ID (App Key) Input -->
+        <div>
+          <label for="dbxClientIdInput" class="block font-bold text-slate-800 mb-1">
+            Dropbox App Key (Client ID)
+          </label>
+          <input id="dbxClientIdInput" type="text" placeholder="Enter your Dropbox App Key (e.g. 8x9k2m4p7q1z5w3)"
+            class="w-full px-3 py-2 font-mono text-xs border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500" />
+          <p class="text-[11px] text-slate-500 mt-1">
+            Create a Scoped App at <span class="font-mono text-slate-700">dropbox.com/developers/apps</span> and enable only
+            <code class="bg-slate-100 px-1 rounded">files.metadata.read</code> and <code class="bg-slate-100 px-1 rounded">files.content.read</code>.
+          </p>
+        </div>
+
+        <!-- Dual-Mode Selector Tabs -->
+        <div>
+          <label class="block font-bold text-slate-800 mb-1.5">Authorization Flow Mode</label>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <button type="button" id="selectModeABtn"
+              class="p-2.5 rounded-xl border-2 border-sky-600 bg-sky-50/80 text-left transition">
+              <div class="font-bold text-sky-950 flex items-center gap-1.5">
+                <i data-lucide="key-round" class="w-3.5 h-3.5 text-sky-600"></i>
+                <span>Mode A: Direct Code Flow</span>
+              </div>
+              <div class="text-[11px] text-sky-800 mt-0.5">
+                Default • No Redirect URI required. Works in sandboxed previews &amp; local files.
+              </div>
+            </button>
+
+            <button type="button" id="selectModeBBtn"
+              class="p-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-left transition">
+              <div class="font-bold text-slate-800 flex items-center gap-1.5">
+                <i data-lucide="external-link" class="w-3.5 h-3.5 text-slate-500"></i>
+                <span>Mode B: Popup / Redirect URI</span>
+              </div>
+              <div class="text-[11px] text-slate-500 mt-0.5">
+                For hosted HTTPS domains (GitHub Pages, Netlify, etc.).
+              </div>
+            </button>
+          </div>
+        </div>
+
+        <!-- MODE A PANEL: Direct Code Flow (No Redirect URI) -->
+        <div id="dbxModeAPanel" class="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+          <div class="flex items-center justify-between gap-2 flex-wrap">
+            <div>
+              <div class="font-bold text-slate-900">Step 1: Open Dropbox Consent Screen</div>
+              <div class="text-[11px] text-slate-500">Click "Allow" on Dropbox to receive your one-time authorization code.</div>
+            </div>
+            <button type="button" id="launchModeAAuthBtn"
+              class="px-3.5 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold shadow-xs flex items-center gap-1.5 shrink-0">
+              <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
+              <span>Open Dropbox &amp; Get Code</span>
+            </button>
+          </div>
+
+          <!-- Direct fallback link in case popup blocker blocks window.open -->
+          <div id="modeAFallbackLinkWrap" class="hidden text-[11px] text-slate-600 bg-white p-2 rounded-lg border border-slate-200">
+            Tab didn't open? <a id="modeAFallbackAnchor" href="#" target="_blank" rel="noopener noreferrer" class="text-sky-600 underline font-semibold">Click here to open Dropbox Authorization in a new tab</a>.
+          </div>
+
+          <!-- Step 2: Paste Authorization Code Input -->
+          <div id="modeACodeEntrySection" class="pt-2 border-t border-slate-200 space-y-2">
+            <label for="dbxManualCodeInput" class="block font-bold text-slate-900">
+              Step 2: Paste Authorization Code from Dropbox
+            </label>
+            <div class="flex items-center gap-2">
+              <input id="dbxManualCodeInput" type="text" placeholder="Paste one-time authorization code here..."
+                class="flex-1 px-3 py-2 font-mono text-xs bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500" />
+              <button type="button" id="completeModeAConnectionBtn"
+                class="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold shadow-xs shrink-0">
+                Complete Connection
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- MODE B PANEL: Popup / Redirect URI Flow -->
+        <div id="dbxModeBPanel" class="hidden p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+          <div>
+            <label class="block font-bold text-slate-800 mb-1">
+              Exact Redirect URI (Whitelist in Dropbox App Console → OAuth 2)
+            </label>
+            <div class="flex items-center gap-1.5">
+              <input id="dbxRedirectUriDisplay" type="text" readonly
+                class="flex-1 px-2.5 py-2 font-mono text-[11px] bg-white border border-slate-300 rounded-xl text-slate-700" />
+              <button type="button" id="copyRedirectUriBtn"
+                class="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold flex items-center gap-1 shrink-0">
+                <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+                <span>Copy</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="flex items-center justify-between gap-2 pt-1">
+            <span class="text-[11px] text-slate-500">Opens centered OAuth popup without unloading your active blueprint.</span>
+            <button type="button" id="launchModeBPopupBtn"
+              class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-bold shadow-xs flex items-center gap-1.5 shrink-0">
+              <i data-lucide="app-window" class="w-3.5 h-3.5"></i>
+              <span>Authorize via Popup</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="px-4 py-2.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0">
+        <span class="text-[11px] text-slate-500">Tokens stored locally in your browser with automatic offline refresh.</span>
+        <button id="doneDbxAuthModalBtn" class="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800">
+          Close
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- MODAL 2: CREATE / EDIT CROSS-SHEET CALLOUT LINK (WITH LIVE PREVIEW)   -->
+  <!-- ===================================================================== -->
+  <div id="calloutLinkModal" class="hidden fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div class="px-4 py-3 bg-slate-900 text-white flex items-center justify-between shrink-0">
+        <div class="flex items-center gap-2">
+          <i data-lucide="link-2" class="w-4 h-4 text-amber-400"></i>
+          <h3 id="calloutModalHeading" class="font-bold text-sm">Create Cross-Sheet Callout Link</h3>
+        </div>
+        <button id="closeCalloutModalBtn" class="text-slate-400 hover:text-white p-1 rounded-lg">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <div class="p-4 grid grid-cols-1 md:grid-cols-2 gap-4 text-xs overflow-y-auto">
+        <!-- Left Column: Callout Configuration Form -->
+        <div class="space-y-3">
+          <div>
+            <label for="calloutLabelInput" class="block font-bold text-slate-800 mb-1">
+              Callout Label
+            </label>
+            <input id="calloutLabelInput" type="text" placeholder="e.g., 3 / S201 - Exterior Footing Detail"
+              class="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500" />
+          </div>
+
+          <div>
+            <label for="calloutTargetDocSelect" class="block font-bold text-slate-800 mb-1">
+              Target Blueprint (Dropbox, Offline &amp; Sample PDFs)
+            </label>
+            <select id="calloutTargetDocSelect"
+              class="w-full px-3 py-2 text-xs border border-slate-300 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-amber-500">
+            </select>
+          </div>
+
+          <div>
+            <label for="calloutTargetPageSelect" class="block font-bold text-slate-800 mb-1">
+              Target Page / Sheet Number
+            </label>
+            <select id="calloutTargetPageSelect"
+              class="w-full px-3 py-2 text-xs font-mono border border-slate-300 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-amber-500">
+            </select>
+          </div>
+
+          <div>
+            <label class="block font-bold text-slate-800 mb-1">Hotspot Marker Shape</label>
+            <div class="grid grid-cols-2 gap-2">
+              <button type="button" id="hotspotShapeCircleBtn"
+                class="py-1.5 px-3 rounded-xl border-2 border-sky-600 bg-sky-50 text-sky-900 font-semibold flex items-center justify-center gap-1.5">
+                <i data-lucide="circle" class="w-3.5 h-3.5"></i>
+                <span>Detail Bubble</span>
+              </button>
+              <button type="button" id="hotspotShapeRectBtn"
+                class="py-1.5 px-3 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 font-semibold flex items-center justify-center gap-1.5">
+                <i data-lucide="square" class="w-3.5 h-3.5"></i>
+                <span>Section Box</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Column: Live Thumbnail Preview of Target Sheet -->
+        <div class="flex flex-col">
+          <div class="font-bold text-slate-800 mb-1 flex items-center justify-between">
+            <span>Live Target Sheet Preview</span>
+            <span id="previewTargetPageBadge" class="font-mono text-[11px] text-sky-700 bg-sky-50 px-2 py-0.2 rounded border border-sky-200">Page 1</span>
+          </div>
+          <div class="flex-1 min-h-[190px] rounded-xl bg-slate-100 border border-slate-300 flex items-center justify-center p-2 overflow-hidden relative">
+            <canvas id="targetSheetPreviewCanvas" class="max-w-full max-h-52 shadow-md bg-white rounded"></canvas>
+            <div id="targetSheetPreviewStatus" class="hidden text-[11px] text-slate-500 text-center px-3">
+              Select a cached or loaded blueprint to preview target sheet.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="px-4 py-3 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-2 shrink-0">
+        <button id="deleteCalloutLinkBtn"
+          class="hidden px-3 py-1.5 rounded-xl text-xs font-semibold text-rose-700 hover:bg-rose-50 border border-rose-200 flex items-center gap-1.5">
+          <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+          <span>Delete Callout</span>
+        </button>
+        <div class="flex items-center gap-2 ml-auto">
+          <button id="cancelCalloutModalBtn" class="px-3.5 py-1.5 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-200">
+            Cancel
+          </button>
+          <button id="saveCalloutModalBtn" class="px-4 py-1.5 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-xs">
+            Save Callout Link
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- TOAST NOTIFICATION STACK                                              -->
+  <!-- ===================================================================== -->
+  <div id="toastStack" class="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-2 pointer-events-none"></div>
+
+  <!-- ===================================================================== -->
+  <!-- COMPLETE CLIENT-SIDE APPLICATION ENGINE                               -->
+  <!-- ===================================================================== -->
+  <script>
+    (function () {
+      'use strict';
+
+      // Configure PDF.js worker
+      if (window.pdfjsLib) {
+        pdfjsLib.GlobalWorkerOptions.workerSrc =
+          'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      }
+
+      // ---------------------------------------------------------------------
+      // SAFE STORAGE LAYER (IN-MEMORY + LOCALSTORAGE, NEVER SESSIONSTORAGE)
+      // ---------------------------------------------------------------------
+      const SafeStore = {
+        memory: {},
+        get(key) {
+          if (Object.prototype.hasOwnProperty.call(this.memory, key)) {
+            return this.memory[key];
+          }
+          try {
+            const val = window.localStorage.getItem(key);
+            if (val !== null) this.memory[key] = val;
+            return val;
+          } catch (e) {
+            return this.memory[key] ?? null;
+          }
+        },
+        set(key, value) {
+          const strVal = String(value);
+          this.memory[key] = strVal;
+          try {
+            window.localStorage.setItem(key, strVal);
+          } catch (e) {
+            // In-memory fallback already populated
+          }
+        },
+        remove(key) {
+          delete this.memory[key];
+          try {
+            window.localStorage.removeItem(key);
+          } catch (e) {
+            // Ignore sandbox storage errors
+          }
+        }
+      };
+
+      // ---------------------------------------------------------------------
+      // TOAST HELPER (NO ALERT / CONFIRM)
+      // ---------------------------------------------------------------------
+      function showToast(message, type = 'info', duration = 3600) {
+        const stack = document.getElementById('toastStack');
+        const el = document.createElement('div');
+        const palette = {
+          info: 'bg-slate-900 text-white border-slate-700',
+          success: 'bg-emerald-950 text-emerald-100 border-emerald-600',
+          warning: 'bg-amber-950 text-amber-100 border-amber-500',
+          error: 'bg-rose-950 text-rose-100 border-rose-500'
+        };
+        const iconName = {
+          info: 'info',
+          success: 'check-circle-2',
+          warning: 'alert-triangle',
+          error: 'x-octagon'
+        };
+        el.className = `pointer-events-auto flex items-center gap-2 px-4 py-2.5 rounded-xl border shadow-2xl text-xs font-semibold transition-all duration-200 transform translate-y-2 opacity-0 ${
+          palette[type] || palette.info
+        }`;
+        el.innerHTML = `<i data-lucide="${iconName[type] || 'info'}" class="w-4 h-4 shrink-0"></i><span>${escapeHtml(message)}</span>`;
+        stack.appendChild(el);
+        if (window.lucide) lucide.createIcons({ nodes: [el] });
+
+        requestAnimationFrame(() => el.classList.remove('translate-y-2', 'opacity-0'));
+        setTimeout(() => {
+          el.classList.add('translate-y-2', 'opacity-0');
+          setTimeout(() => el.remove(), 220);
+        }, duration);
+      }
+
+      function escapeHtml(str) {
+        return String(str || '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+      }
+
+      function formatBytes(bytes) {
+        if (!bytes || bytes <= 0) return '0.0 MB';
+        const mb = bytes / (1024 * 1024);
+        return mb < 0.1 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${mb.toFixed(1)} MB`;
+      }
+
+      function formatDateShort(isoStr) {
+        if (!isoStr) return '';
+        try {
+          const d = new Date(isoStr);
+          return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+        } catch {
+          return '';
+        }
+      }
+
+      // ---------------------------------------------------------------------
+      // INDEXEDDB OFFLINE STORAGE (`ProDrawOfflineDB`)
+      // ---------------------------------------------------------------------
+      const ProDrawDB = {
+        dbName: 'ProDrawOfflineDB',
+        version: 1,
+        db: null,
+
+        async init() {
+          return new Promise((resolve, reject) => {
+            const req = indexedDB.open(this.dbName, this.version);
+            req.onupgradeneeded = (e) => {
+              const db = e.target.result;
+              if (!db.objectStoreNames.contains('documents')) {
+                db.createObjectStore('documents', { keyPath: 'docId' });
+              }
+              if (!db.objectStoreNames.contains('blobs')) {
+                db.createObjectStore('blobs');
+              }
+              if (!db.objectStoreNames.contains('links')) {
+                db.createObjectStore('links', { keyPath: 'id' });
+              }
+            };
+            req.onsuccess = (e) => {
+              this.db = e.target.result;
+              resolve(this.db);
+            };
+            req.onerror = (e) => reject(e.target.error);
+          });
+        },
+
+        async getAllDocuments() {
+          return new Promise((resolve, reject) => {
+            const tx = this.db.transaction('documents', 'readonly');
+            const req = tx.objectStore('documents').getAll();
+            req.onsuccess = () => resolve(req.result || []);
+            req.onerror = (e) => reject(e.target.error);
+          });
+        },
+
+        async saveDocument(docMeta, arrayBuffer = null) {
+          if (arrayBuffer) {
+            await this.saveBlob(docMeta.docId, arrayBuffer);
+          }
+          return new Promise((resolve, reject) => {
+            const tx = this.db.transaction('documents', 'readwrite');
+            const req = tx.objectStore('documents').put(docMeta);
+            req.onsuccess = () => resolve();
+            req.onerror = (e) => reject(e.target.error);
+          });
+        },
+
+        async deleteDocument(docId) {
+          await this.deleteBlob(docId);
+          return new Promise((resolve, reject) => {
+            const tx = this.db.transaction('documents', 'readwrite');
+            const req = tx.objectStore('documents').delete(docId);
+            req.onsuccess = () => resolve();
+            req.onerror = (e) => reject(e.target.error);
+          });
+        },
+
+        async saveBlob(docId, arrayBuffer) {
+          return new Promise((resolve, reject) => {
+            const tx = this.db.transaction('blobs', 'readwrite');
+            const req = tx.objectStore('blobs').put(arrayBuffer, docId);
+            req.onsuccess = () => resolve();
+            req.onerror = (e) => reject(e.target.error);
+          });
+        },
+
+        async getBlob(docId) {
+          return new Promise((resolve, reject) => {
+            const tx = this.db.transaction('blobs', 'readonly');
+            const req = tx.objectStore('blobs').get(docId);
+            req.onsuccess = () => resolve(req.result || null);
+            req.onerror = (e) => reject(e.target.error);
+          });
+        },
+
+        async deleteBlob(docId) {
+          return new Promise((resolve, reject) => {
+            const tx = this.db.transaction('blobs', 'readwrite');
+            const req = tx.objectStore('blobs').delete(docId);
+            req.onsuccess = () => resolve();
+            req.onerror = (e) => reject(e.target.error);
+          });
+        },
+
+        async getAllLinks() {
+          return new Promise((resolve, reject) => {
+            const tx = this.db.transaction('links', 'readonly');
+            const req = tx.objectStore('links').getAll();
+            req.onsuccess = () => resolve(req.result || []);
+            req.onerror = (e) => reject(e.target.error);
+          });
+        },
+
+        async saveLink(linkObj) {
+          return new Promise((resolve, reject) => {
+            const tx = this.db.transaction('links', 'readwrite');
+            const req = tx.objectStore('links').put(linkObj);
+            req.onsuccess = () => resolve();
+            req.onerror = (e) => reject(e.target.error);
+          });
+        },
+
+        async deleteLink(linkId) {
+          return new Promise((resolve, reject) => {
+            const tx = this.db.transaction('links', 'readwrite');
+            const req = tx.objectStore('links').delete(linkId);
+            req.onsuccess = () => resolve();
+            req.onerror = (e) => reject(e.target.error);
+          });
+        }
+      };
+
+      // ---------------------------------------------------------------------
+      // APPLICATION STATE
+      // ---------------------------------------------------------------------
+      const state = {
+        // Documents registry: Map<docId, DocMeta>
+        // DocMeta: { docId, name, source ('sample'|'dropbox'|'local'), dropboxPath, size, modifiedAt, numPages, pageLabels, isOffline }
+        documents: new Map(),
+        memoryBlobs: new Map(),    // docId -> ArrayBuffer
+        pdfProxyCache: new Map(),  // docId -> PDFDocumentProxy
+
+        activeDocId: null,
+        activePage: 1,
+
+        // Cross-sheet callout links array
+        links: [],
+
+        // Navigation History Stack for "← Back to [Sheet Name - Page X]"
+        navStack: [],
+
+        // Viewport Pan & Zoom
+        zoom: 1,
+        minZoom: 0.2,
+        maxZoom: 8.0,
+        panX: 0,
+        panY: 0,
+        baseWidth: 1000,
+        baseHeight: 667,
+        renderedScale: 1,
+        renderDebounceTimer: null,
+        activeRenderId: 0,
+
+        // Interaction Modes
+        linkToolActive: false,
+        showLinks: true,
+        isPanning: false,
+        panStartX: 0,
+        panStartY: 0,
+        panOriginX: 0,
+        panOriginY: 0,
+
+        // Drawing new callout box
+        isDrawingBox: false,
+        drawStartPctX: 0,
+        drawStartPctY: 0,
+        pendingBoxPct: null,
+        editingLinkId: null,
+        modalShape: 'circle',
+
+        // Touch Pinch-to-Zoom
+        touchGesture: null,
+        pinchStartDist: 0,
+        pinchStartZoom: 1,
+
+        // Sidebar & Dropbox Browser state
+        activeSidebarTab: 'dropbox',
+        dbxAuthMode: 'modeA', // 'modeA' (Direct Code) | 'modeB' (Popup/Redirect)
+        dbxCurrentPath: '',
+        dbxEntries: [],
+        dbxSearchQuery: '',
+        dbxPdfOnly: true
+      };
+
+      // ---------------------------------------------------------------------
+      // DUAL-MODE DROPBOX READ-ONLY OAUTH 2.0 PKCE CLIENT
+      // ---------------------------------------------------------------------
+      const DropboxOAuth = {
+        SCOPES: 'files.metadata.read files.content.read',
+
+        getRedirectUri() {
+          return window.location.origin + window.location.pathname;
+        },
+
+        getClientId() {
+          return SafeStore.get('prodraw_dbx_client_id') || '';
+        },
+
+        getAccessToken() {
+          return SafeStore.get('prodraw_dbx_access_token') || '';
+        },
+
+        getRefreshToken() {
+          return SafeStore.get('prodraw_dbx_refresh_token') || '';
+        },
+
+        getExpiresAt() {
+          return Number(SafeStore.get('prodraw_dbx_expires_at') || 0);
+        },
+
+        getAccountSummary() {
+          return SafeStore.get('prodraw_dbx_account_label') || '';
+        },
+
+        isConnected() {
+          return Boolean(this.getAccessToken() || this.getRefreshToken());
+        },
+
+        generateRandomVerifier(length = 64) {
+          const charset = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
+          const bytes = new Uint8Array(length);
+          crypto.getRandomValues(bytes);
+          return Array.from(bytes, (b) => charset[b % charset.length]).join('');
+        },
+
+        async computeS256Challenge(verifier) {
+          const encoded = new TextEncoder().encode(verifier);
+          const digest = await crypto.subtle.digest('SHA-256', encoded);
+          const base64 = btoa(String.fromCharCode(...new Uint8Array(digest)));
+          return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        },
+
+        showAuthError(msg) {
+          const box = document.getElementById('dbxAuthErrorBox');
+          const txt = document.getElementById('dbxAuthErrorMessage');
+          if (!msg) {
+            box.classList.add('hidden');
+            txt.textContent = '';
+            return;
+          }
+          txt.textContent = msg;
+          box.classList.remove('hidden');
+        },
+
+        // MODE A: Direct Code Flow (No redirect_uri -> Dropbox displays code on screen)
+        async launchModeADirectCode(clientIdInput) {
+          this.showAuthError('');
+          const clientId = clientIdInput.trim();
+          if (!clientId) {
+            this.showAuthError('Please enter your Dropbox App Key (Client ID) first.');
+            return;
+          }
+
+          const verifier = this.generateRandomVerifier(64);
+          const challenge = await this.computeS256Challenge(verifier);
+
+          SafeStore.set('prodraw_dbx_client_id', clientId);
+          SafeStore.set('prodraw_dbx_code_verifier', verifier);
+          SafeStore.set('prodraw_dbx_flow_type', 'modeA');
+
+          // Omit redirect_uri so Dropbox displays the authorization code on screen
+          const params = new URLSearchParams({
+            client_id: clientId,
+            response_type: 'code',
+            code_challenge: challenge,
+            code_challenge_method: 'S256',
+            token_access_type: 'offline',
+            scope: this.SCOPES
+          });
+
+          const authUrl = `https://www.dropbox.com/oauth2/authorize?${params.toString()}`;
+
+          // Reveal fallback anchor and auto-focus code input
+          const fallbackWrap = document.getElementById('modeAFallbackLinkWrap');
+          const fallbackAnchor = document.getElementById('modeAFallbackAnchor');
+          fallbackAnchor.href = authUrl;
+          fallbackWrap.classList.remove('hidden');
+
+          window.open(authUrl, '_blank', 'noopener,noreferrer');
+
+          const codeInput = document.getElementById('dbxManualCodeInput');
+          codeInput.value = '';
+          setTimeout(() => codeInput.focus(), 150);
+          showToast('Opened Dropbox in a new tab. Copy the code shown after clicking Allow.', 'info', 4500);
+        },
+
+        // MODE B: Popup / Redirect URI Flow (For Hosted Domains / GitHub Pages)
+        async launchModeBPopup(clientIdInput) {
+          this.showAuthError('');
+          const clientId = clientIdInput.trim();
+          if (!clientId) {
+            this.showAuthError('Please enter your Dropbox App Key (Client ID) first.');
+            return;
+          }
+
+          const verifier = this.generateRandomVerifier(64);
+          const oauthState = this.generateRandomVerifier(24);
+          const challenge = await this.computeS256Challenge(verifier);
+          const redirectUri = this.getRedirectUri();
+
+          SafeStore.set('prodraw_dbx_client_id', clientId);
+          SafeStore.set('prodraw_dbx_code_verifier', verifier);
+          SafeStore.set('prodraw_dbx_oauth_state', oauthState);
+          SafeStore.set('prodraw_dbx_flow_type', 'modeB');
+
+          const params = new URLSearchParams({
+            client_id: clientId,
+            response_type: 'code',
+            code_challenge: challenge,
+            code_challenge_method: 'S256',
+            redirect_uri: redirectUri,
+            token_access_type: 'offline',
+            scope: this.SCOPES,
+            state: oauthState
+          });
+
+          const authUrl = `https://www.dropbox.com/oauth2/authorize?${params.toString()}`;
+          const width = 620;
+          const height = 720;
+          const left = Math.max(0, Math.round(window.screenX + (window.outerWidth - width) / 2));
+          const top = Math.max(0, Math.round(window.screenY + (window.outerHeight - height) / 2));
+
+          const popup = window.open(
+            authUrl,
+            'prodraw_dropbox_oauth',
+            `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`
+          );
+
+          if (!popup) {
+            this.showAuthError('Popup was blocked by your browser. Please allow popups for this site or use Mode A (Direct Code Flow).');
+          }
+        },
+
+        // Exchange authorization code + code_verifier for access_token & refresh_token
+        async exchangeCodeForTokens(authCode, includeRedirectUri = false) {
+          this.showAuthError('');
+          const cleanCode = (authCode || '').trim();
+          const clientId = this.getClientId();
+          const verifier = SafeStore.get('prodraw_dbx_code_verifier');
+
+          if (!cleanCode) {
+            this.showAuthError('Please paste the Authorization Code from Dropbox.');
+            return false;
+          }
+          if (!clientId || !verifier) {
+            this.showAuthError('Missing PKCE session verifier or Client ID. Please click Step 1 to start authorization again.');
+            return false;
+          }
+
+          const bodyParams = new URLSearchParams({
+            code: cleanCode,
+            grant_type: 'authorization_code',
+            client_id: clientId,
+            code_verifier: verifier
+          });
+
+          if (includeRedirectUri) {
+            bodyParams.set('redirect_uri', this.getRedirectUri());
+          }
+
+          try {
+            const res = await fetch('https://api.dropboxapi.com/oauth2/token', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: bodyParams.toString()
+            });
+
+            const rawText = await res.text();
+            let data = {};
+            try {
+              data = JSON.parse(rawText);
+            } catch {
+              data = { error_description: rawText };
+            }
+
+            if (!res.ok || !data.access_token) {
+              const errMsg =
+                data.error_description ||
+                data.error_summary ||
+                data.error ||
+                `HTTP ${res.status} token exchange failure`;
+              throw new Error(errMsg);
+            }
+
+            const expiresInSec = Number(data.expires_in || 14400);
+            const expiresAt = Date.now() + expiresInSec * 1000;
+
+            SafeStore.set('prodraw_dbx_access_token', data.access_token);
+            SafeStore.set('prodraw_dbx_expires_at', expiresAt);
+            if (data.refresh_token) {
+              SafeStore.set('prodraw_dbx_refresh_token', data.refresh_token);
+            }
+            SafeStore.remove('prodraw_dbx_code_verifier');
+            SafeStore.remove('prodraw_dbx_oauth_state');
+
+            await this.verifyAndFetchAccountInfo(true);
+            return true;
+          } catch (err) {
+            console.error('Dropbox PKCE token exchange error:', err);
+            this.showAuthError(err.message);
+            showToast(`Dropbox connection failed: ${err.message}`, 'error', 5000);
+            return false;
+          }
+        },
+
+        // Automatically refresh expired access_token using refresh_token
+        async ensureValidAccessToken() {
+          const token = this.getAccessToken();
+          const refreshToken = this.getRefreshToken();
+          const clientId = this.getClientId();
+          const expiresAt = this.getExpiresAt();
+
+          // If token is valid for at least 60 more seconds, return it immediately
+          if (token && (!expiresAt || Date.now() < expiresAt - 60000)) {
+            return token;
+          }
+
+          if (!refreshToken || !clientId) {
+            if (token) return token;
+            throw new Error('Dropbox session expired. Please reconnect.');
+          }
+
+          const body = new URLSearchParams({
+            grant_type: 'refresh_token',
+            refresh_token: refreshToken,
+            client_id: clientId
+          });
+
+          const res = await fetch('https://api.dropboxapi.com/oauth2/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: body.toString()
+          });
+
+          const rawText = await res.text();
+          let data = {};
+          try {
+            data = JSON.parse(rawText);
+          } catch {
+            data = { error_description: rawText };
+          }
+
+          if (!res.ok || !data.access_token) {
+            throw new Error(data.error_description || 'Failed to silently refresh Dropbox token.');
+          }
+
+          const newExpiresAt = Date.now() + Number(data.expires_in || 14400) * 1000;
+          SafeStore.set('prodraw_dbx_access_token', data.access_token);
+          SafeStore.set('prodraw_dbx_expires_at', newExpiresAt);
+          return data.access_token;
+        },
+
+        // Verify connection & fetch account display name/email via /2/users/get_current_account
+        async verifyAndFetchAccountInfo(notify = false) {
+          const token = await this.ensureValidAccessToken();
+          let accountLabel = 'Dropbox Read-Only';
+
+          try {
+            const res = await fetch('https://api.dropboxapi.com/2/users/get_current_account', {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json'
+              },
+              body: 'null'
+            });
+
+            if (res.ok) {
+              const info = await res.json();
+              const displayName = info.name?.display_name || '';
+              const email = info.email || '';
+              accountLabel = displayName && email ? `${displayName} (${email})` : displayName || email || accountLabel;
+            } else {
+              // If user strictly enabled only files.metadata.read & files.content.read (without account_info.read),
+              // verify read-only file access cleanly via list_folder so connection test succeeds!
+              const probeRes = await fetch('https://api.dropboxapi.com/2/files/list_folder', {
+                method: 'POST',
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ path: '', limit: 1 })
+              });
+              if (!probeRes.ok) {
+                const probeErr = await probeRes.text();
+                throw new Error(`Token verification failed (${probeRes.status}): ${probeErr}`);
+              }
+              accountLabel = 'Dropbox (Read-Only Files)';
+            }
+          } catch (err) {
+            if (notify) showToast(`Connection test failed: ${err.message}`, 'error', 4500);
+            throw err;
+          }
+
+          SafeStore.set('prodraw_dbx_account_label', accountLabel);
+          updateDropboxUIStatus();
+          if (notify) {
+            showToast(`Connected: ${accountLabel}`, 'success');
+          }
+          return accountLabel;
+        },
+
+        // Handle incoming ?code= or ?error= on page load or inside OAuth popup
+        async handleUrlCallbackOnLoad() {
+          const params = new URLSearchParams(window.location.search);
+          const code = params.get('code');
+          const returnedState = params.get('state');
+          const error = params.get('error');
+          const errorDesc = params.get('error_description');
+
+          if (!code && !error) return;
+
+          // Clean URL immediately
+          window.history.replaceState({}, document.title, this.getRedirectUri());
+
+          // If this window was opened as a Mode B popup by window.opener, relay result and close popup
+          if (window.opener && !window.opener.closed) {
+            try {
+              window.opener.postMessage(
+                {
+                  type: 'PRODRAW_DROPBOX_OAUTH_CALLBACK',
+                  code,
+                  state: returnedState,
+                  error,
+                  errorDescription: errorDesc
+                },
+                window.location.origin
+              );
+              window.close();
+              return;
+            } catch (e) {
+              // Fallback to handling in current window if cross-origin opener access is restricted
+            }
+          }
+
+          if (error || errorDesc) {
+            openDropboxAuthModal();
+            this.showAuthError(errorDesc || error);
+            return;
+          }
+
+          const expectedState = SafeStore.get('prodraw_dbx_oauth_state');
+          if (expectedState && returnedState && expectedState !== returnedState) {
+            openDropboxAuthModal();
+            this.showAuthError('OAuth state parameter mismatch. Please try authorizing again.');
+            return;
+          }
+
+          const ok = await this.exchangeCodeForTokens(code, true);
+          if (ok) {
+            switchSidebarTab('dropbox');
+            await loadDropboxFolder('');
+          }
+        },
+
+        disconnect() {
+          SafeStore.remove('prodraw_dbx_access_token');
+          SafeStore.remove('prodraw_dbx_refresh_token');
+          SafeStore.remove('prodraw_dbx_expires_at');
+          SafeStore.remove('prodraw_dbx_account_label');
+          SafeStore.remove('prodraw_dbx_code_verifier');
+          SafeStore.remove('prodraw_dbx_oauth_state');
+          state.dbxEntries = [];
+          state.dbxCurrentPath = '';
+          updateDropboxUIStatus();
+          renderDropboxBrowserList();
+          showToast('Disconnected from Dropbox.', 'info');
+        },
+
+        async listFolder(path = '') {
+          const token = await this.ensureValidAccessToken();
+          const res = await fetch('https://api.dropboxapi.com/2/files/list_folder', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              path,
+              include_deleted: false,
+              include_mounted_folders: true
+            })
+          });
+
+          const rawText = await res.text();
+          let data = {};
+          try {
+            data = JSON.parse(rawText);
+          } catch {
+            data = { error_summary: rawText };
+          }
+
+          if (!res.ok) {
+            throw new Error(data.error_summary || `Dropbox API error (${res.status})`);
+          }
+          return data.entries || [];
+        },
+
+        async downloadFile(path) {
+          const token = await this.ensureValidAccessToken();
+          const res = await fetch('https://content.dropboxapi.com/2/files/download', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Dropbox-API-Arg': JSON.stringify({ path })
+            }
+          });
+
+          if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(`Dropbox download failed (${res.status}): ${errText}`);
+          }
+          return await res.arrayBuffer();
+        }
+      };
+
+      // ---------------------------------------------------------------------
+      // BUILT-IN 4-PAGE COMMERCIAL SAMPLE BLUEPRINT SET (`pdf-lib`)
+      // ---------------------------------------------------------------------
+      async function createSampleCommercialBlueprintSet() {
+        const { PDFDocument, StandardFonts, rgb } = PDFLib;
+        const pdfDoc = await PDFDocument.create();
+        const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+        const fontReg = await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+        // Architectural D Landscape proportions (1296 x 864 pt)
+        const W = 1296;
+        const H = 864;
+
+        const cSlate = rgb(0.07, 0.11, 0.18);
+        const cSteel = rgb(0.14, 0.28, 0.48);
+        const cMuted = rgb(0.42, 0.47, 0.55);
+        const cGrid = rgb(0.84, 0.87, 0.92);
+        const cAmber = rgb(0.85, 0.47, 0.02);
+        const cSky = rgb(0.01, 0.52, 0.78);
+        const cFill = rgb(0.95, 0.97, 0.99);
+        const cConcrete = rgb(0.88, 0.91, 0.95);
+
+        function drawTitleBlockAndBorder(page, sheetCode, sheetTitle, scaleStr) {
+          page.drawRectangle({ x: 24, y: 24, width: W - 48, height: H - 48, borderColor: cSlate, borderWidth: 2.5 });
+          page.drawRectangle({ x: 32, y: 32, width: W - 64, height: H - 64, borderColor: cSlate, borderWidth: 1 });
+
+          const tbX = W - 216;
+          const tbW = 184;
+          page.drawRectangle({ x: tbX, y: 32, width: tbW, height: H - 64, color: cFill, borderColor: cSlate, borderWidth: 1.5 });
+
+          [150, 270, 415, 565, 705].forEach((yLine) => {
+            page.drawLine({ start: { x: tbX, y: yLine }, end: { x: tbX + tbW, y: yLine }, color: cSlate, thickness: 1 });
+          });
+
+          page.drawText('IRONWOOD AEC', { x: tbX + 14, y: H - 68, size: 13, font: fontBold, color: cSlate });
+          page.drawText('ARCHITECTS & ENGINEERS', { x: tbX + 14, y: H - 84, size: 9, font: fontBold, color: cSky });
+          page.drawText('DENVER, CO • LICENSE #40892', { x: tbX + 14, y: H - 102, size: 7.5, font: fontReg, color: cMuted });
+
+          page.drawText('PROJECT:', { x: tbX + 14, y: 686, size: 7.5, font: fontBold, color: cMuted });
+          page.drawText('RIVERFRONT MEDICAL', { x: tbX + 14, y: 670, size: 10, font: fontBold, color: cSlate });
+          page.drawText('OFFICE BUILDING', { x: tbX + 14, y: 655, size: 10, font: fontBold, color: cSlate });
+          page.drawText('2450 PLATTE ST, DENVER', { x: tbX + 14, y: 636, size: 8, font: fontReg, color: cMuted });
+
+          page.drawText('ISSUE PHASE:', { x: tbX + 14, y: 546, size: 7.5, font: fontBold, color: cMuted });
+          page.drawText('100% CONSTRUCTION DOCS', { x: tbX + 14, y: 530, size: 8.5, font: fontBold, color: cAmber });
+          page.drawText('DATE: NOV 15, 2026', { x: tbX + 14, y: 512, size: 8, font: fontReg, color: cSlate });
+
+          page.drawText('SHEET TITLE:', { x: tbX + 14, y: 396, size: 7.5, font: fontBold, color: cMuted });
+          const words = sheetTitle.split(' ');
+          let l1 = '', l2 = '', l3 = '';
+          words.forEach((w) => {
+            if ((l1 + ' ' + w).trim().length <= 18) l1 = (l1 + ' ' + w).trim();
+            else if ((l2 + ' ' + w).trim().length <= 18) l2 = (l2 + ' ' + w).trim();
+            else l3 = (l3 + ' ' + w).trim();
+          });
+          page.drawText(l1, { x: tbX + 14, y: 376, size: 10, font: fontBold, color: cSlate });
+          if (l2) page.drawText(l2, { x: tbX + 14, y: 360, size: 10, font: fontBold, color: cSlate });
+          if (l3) page.drawText(l3, { x: tbX + 14, y: 344, size: 10, font: fontBold, color: cSlate });
+
+          page.drawText('SCALE:', { x: tbX + 14, y: 252, size: 7.5, font: fontBold, color: cMuted });
+          page.drawText(scaleStr, { x: tbX + 14, y: 234, size: 10, font: fontBold, color: cSlate });
+          page.drawText('DRAWN: M. HENDERSON', { x: tbX + 14, y: 204, size: 7.5, font: fontReg, color: cMuted });
+          page.drawText('CHECKED: K. PATEL, SE', { x: tbX + 14, y: 188, size: 7.5, font: fontReg, color: cMuted });
+
+          page.drawText('SHEET NUMBER:', { x: tbX + 14, y: 132, size: 7.5, font: fontBold, color: cMuted });
+          page.drawText(sheetCode, { x: tbX + 14, y: 82, size: 34, font: fontBold, color: cSlate });
+        }
+
+        function drawDetailBubble(page, cx, cy, detailNum, targetSheet, caption) {
+          const r = 24;
+          page.drawCircle({ x: cx, y: cy, size: r, color: rgb(1, 1, 1), borderColor: cSky, borderWidth: 2.2 });
+          page.drawLine({ start: { x: cx - r + 2, y: cy }, end: { x: cx + r - 2, y: cy }, color: cSky, thickness: 1.5 });
+          page.drawText(detailNum, { x: cx - detailNum.length * 3.2, y: cy + 6, size: 11, font: fontBold, color: cSlate });
+          page.drawText(targetSheet, { x: cx - 14, y: cy - 14, size: 10.5, font: fontBold, color: cSky });
+          if (caption) {
+            page.drawText(caption, { x: cx + r + 8, y: cy - 4, size: 8.5, font: fontBold, color: cSlate });
+          }
+        }
+
+        function drawStructuralGrid(page) {
+          const cols = [150, 320, 490, 660, 830, 1000];
+          const colNames = ['A', 'B', 'C', 'D', 'E', 'F'];
+          const rows = [700, 565, 430, 295, 160];
+          const rowNames = ['1', '2', '3', '4', '5'];
+
+          cols.forEach((gx, i) => {
+            page.drawLine({ start: { x: gx, y: 120 }, end: { x: gx, y: 745 }, color: cGrid, thickness: 1, dashArray: [6, 4] });
+            page.drawCircle({ x: gx, y: 770, size: 15, color: rgb(1, 1, 1), borderColor: cSlate, borderWidth: 1.5 });
+            page.drawText(colNames[i], { x: gx - 4, y: 765, size: 11, font: fontBold, color: cSlate });
+            if (i < cols.length - 1) {
+              page.drawText("24'-0\"", { x: gx + 70, y: 748, size: 8.5, font: fontReg, color: cMuted });
+            }
+          });
+
+          rows.forEach((gy, i) => {
+            page.drawLine({ start: { x: 105, y: gy }, end: { x: 1030, y: gy }, color: cGrid, thickness: 1, dashArray: [6, 4] });
+            page.drawCircle({ x: 82, y: gy, size: 15, color: rgb(1, 1, 1), borderColor: cSlate, borderWidth: 1.5 });
+            page.drawText(rowNames[i], { x: gy === 700 ? 79 : 78.5, y: gy - 4, size: 11, font: fontBold, color: cSlate });
+          });
+
+          page.drawText("OVERALL BUILDING LENGTH: 120'-0\" (5 BAYS @ 24'-0\")", { x: 420, y: 88, size: 9.5, font: fontBold, color: cSlate });
+        }
+
+        // -------------------------------------------------------------------
+        // PAGE 1: A101 - OVERALL FOUNDATION & FLOOR PLAN
+        // -------------------------------------------------------------------
+        const p1 = pdfDoc.addPage([W, H]);
+        drawTitleBlockAndBorder(p1, 'A101', 'OVERALL FOUNDATION & FLOOR PLAN', '1/8" = 1\'-0"');
+        drawStructuralGrid(p1);
+
+        // Building Exterior Footprint & Interior Core Partitions
+        p1.drawRectangle({ x: 150, y: 160, width: 850, height: 540, color: cFill, borderColor: cSteel, borderWidth: 3.5 });
+        p1.drawRectangle({ x: 490, y: 295, width: 170, height: 270, color: cConcrete, borderColor: cSlate, borderWidth: 2 });
+        p1.drawText('ELEVATOR & STAIR CORE', { x: 506, y: 432, size: 9, font: fontBold, color: cSlate });
+        p1.drawText('MAIN LOBBY & RECEPTION', { x: 245, y: 360, size: 11, font: fontBold, color: cSteel });
+        p1.drawText('OPEN MEDICAL OFFICE SUITE', { x: 735, y: 490, size: 10.5, font: fontBold, color: cSteel });
+        p1.drawText('SLAB-ON-GRADE: 5" REINFORCED CONCRETE @ EL. 100\'-0"', { x: 175, y: 185, size: 9, font: fontBold, color: cSlate });
+
+        // Callout Bubbles on A101
+        drawDetailBubble(p1, 235, 635, '2', 'S101', 'FOOTING & PIER PLAN');
+        drawDetailBubble(p1, 575, 625, '3', 'S201', 'EXTERIOR FOOTING DETAIL');
+        drawDetailBubble(p1, 915, 225, '4', 'A301', 'SOUTH ELEVATION & DOORS');
+
+        // -------------------------------------------------------------------
+        // PAGE 2: S101 - STRUCTURAL FOOTING & PIER PLAN
+        // -------------------------------------------------------------------
+        const p2 = pdfDoc.addPage([W, H]);
+        drawTitleBlockAndBorder(p2, 'S101', 'STRUCTURAL FOOTING & PIER PLAN', '1/8" = 1\'-0"');
+        drawStructuralGrid(p2);
+
+        // Grade Beam Perimeter & Spread Footings at every Grid Intersection
+        p2.drawRectangle({ x: 150, y: 160, width: 850, height: 540, borderColor: cSky, borderWidth: 4 });
+        const cols = [150, 320, 490, 660, 830, 1000];
+        const rows = [700, 565, 430, 295, 160];
+        cols.forEach((gx) => {
+          rows.forEach((gy) => {
+            p2.drawRectangle({ x: gx - 24, y: gy - 24, width: 48, height: 48, color: cConcrete, borderColor: cSlate, borderWidth: 1.4 });
+            p2.drawRectangle({ x: gx - 8, y: gy - 8, width: 16, height: 16, color: cSlate });
+          });
+        });
+        p2.drawText('TYPICAL SPREAD FOOTING: 6\'-0" × 6\'-0" × 18" DEEP W/ (6) #5 BARS E.W.', { x: 185, y: 635, size: 9.5, font: fontBold, color: cSlate });
+        p2.drawText('CONT. GRADE BEAM: 18" WIDE × 36" DEEP W/ (4) #6 TOP & BOTT.', { x: 185, y: 225, size: 9.5, font: fontBold, color: cSteel });
+
+        drawDetailBubble(p2, 405, 495, '3', 'S201', 'GRADE BEAM SECTION');
+        drawDetailBubble(p2, 745, 360, '1', 'A101', 'ARCHITECTURAL FLOOR PLAN');
+
+        // -------------------------------------------------------------------
+        // PAGE 3: S201 - TYPICAL WALL & GRADE BEAM SECTIONS
+        // -------------------------------------------------------------------
+        const p3 = pdfDoc.addPage([W, H]);
+        drawTitleBlockAndBorder(p3, 'S201', 'TYPICAL WALL & GRADE BEAM SECTIONS', '3/4" = 1\'-0"');
+
+        // Section 3: Exterior Footing & Stem Wall Detail
+        p3.drawRectangle({ x: 75, y: 110, width: 460, height: 690, borderColor: cSlate, borderWidth: 1.5 });
+        p3.drawText('DETAIL 3 — EXTERIOR FOOTING & STEM WALL', { x: 95, y: 772, size: 12, font: fontBold, color: cSlate });
+        p3.drawRectangle({ x: 180, y: 195, width: 230, height: 65, color: cConcrete, borderColor: cSlate, borderWidth: 2.5 });
+        p3.drawRectangle({ x: 250, y: 260, width: 90, height: 390, color: cConcrete, borderColor: cSlate, borderWidth: 2.5 });
+        p3.drawRectangle({ x: 340, y: 535, width: 170, height: 30, color: cFill, borderColor: cSteel, borderWidth: 2 });
+        p3.drawText('5" SLAB-ON-GRADE W/ VAPOR BARRIER', { x: 346, y: 575, size: 8, font: fontBold, color: cSteel });
+        p3.drawText('24" × 12" CONTINUOUS STRIP FOOTING', { x: 185, y: 170, size: 9, font: fontBold, color: cSlate });
+        drawDetailBubble(p3, 145, 330, '2', 'S101', 'SEE FOOTING PLAN');
+
+        // Section 4: Interior Grade Beam & Pier Connection
+        p3.drawRectangle({ x: 565, y: 110, width: 470, height: 690, borderColor: cSlate, borderWidth: 1.5 });
+        p3.drawText('DETAIL 4 — INTERIOR GRADE BEAM & PIER', { x: 585, y: 772, size: 12, font: fontBold, color: cSlate });
+        p3.drawRectangle({ x: 655, y: 210, width: 290, height: 85, color: cConcrete, borderColor: cSlate, borderWidth: 2.5 });
+        p3.drawRectangle({ x: 745, y: 295, width: 110, height: 375, color: cConcrete, borderColor: cSlate, borderWidth: 2.5 });
+        p3.drawText('(4) 1" DIA. ANCHOR BOLTS IN PIER CAP', { x: 675, y: 690, size: 9, font: fontBold, color: cSky });
+        p3.drawText('#4 CLOSED TIES @ 8" O.C.', { x: 590, y: 470, size: 9, font: fontBold, color: cSlate });
+        drawDetailBubble(p3, 940, 360, '1', 'A101', 'RETURN TO FLOOR PLAN');
+
+        // -------------------------------------------------------------------
+        // PAGE 4: A301 - BUILDING ELEVATIONS & DOOR SCHEDULE
+        // -------------------------------------------------------------------
+        const p4 = pdfDoc.addPage([W, H]);
+        drawTitleBlockAndBorder(p4, 'A301', 'BUILDING ELEVATIONS & DOOR SCHEDULE', '1/4" = 1\'-0"');
+
+        // South Elevation Schematic
+        p4.drawRectangle({ x: 75, y: 455, width: 960, height: 345, borderColor: cSlate, borderWidth: 1.5 });
+        p4.drawText('SOUTH EXTERIOR ELEVATION — RIVERFRONT FACADE', { x: 95, y: 772, size: 12, font: fontBold, color: cSlate });
+        p4.drawLine({ start: { x: 105, y: 500 }, end: { x: 1005, y: 500 }, color: cSlate, thickness: 3 });
+        p4.drawRectangle({ x: 165, y: 500, width: 780, height: 220, color: cFill, borderColor: cSteel, borderWidth: 2.5 });
+        // Storefront glazing bays
+        [200, 385, 570, 755].forEach((wx) => {
+          p4.drawRectangle({ x: wx, y: 530, width: 150, height: 145, color: rgb(0.86, 0.94, 0.99), borderColor: cSky, borderWidth: 1.5 });
+        });
+        p4.drawText('FINISH GRADE EL. 99\'-6"', { x: 110, y: 482, size: 8.5, font: fontBold, color: cMuted });
+        p4.drawText('PARAPET ROOF EL. 118\'-0"', { x: 110, y: 730, size: 8.5, font: fontBold, color: cSlate });
+
+        // Door Schedule Table
+        p4.drawRectangle({ x: 75, y: 110, width: 960, height: 315, borderColor: cSlate, borderWidth: 1.5 });
+        p4.drawRectangle({ x: 75, y: 388, width: 960, height: 37, color: cSlate });
+        p4.drawText('COMMERCIAL DOOR & HARDWARE SCHEDULE', { x: 95, y: 402, size: 11, font: fontBold, color: rgb(1, 1, 1) });
+
+        const doors = [
+          { mark: 'D-101', loc: 'MAIN LOBBY ENTRY', size: '6\'-0" × 8\'-0"', mat: 'ALUM. STOREFRONT', fire: 'N/A' },
+          { mark: 'D-102', loc: 'STAIRWELL A EXIT', size: '3\'-0" × 7\'-0"', mat: 'HOLLOW METAL', fire: '90 MIN' },
+          { mark: 'D-103', loc: 'ELECTRICAL ROOM', size: '3\'-0" × 7\'-0"', mat: 'HOLLOW METAL', fire: '60 MIN' },
+          { mark: 'D-104', loc: 'SUITE 100 ENTRY', size: '3\'-6" × 8\'-0"', mat: 'SOLID CORE WOOD', fire: '20 MIN' }
+        ];
+        doors.forEach((d, idx) => {
+          const y = 350 - idx * 54;
+          p4.drawLine({ start: { x: 75, y: y - 16 }, end: { x: 1035, y: y - 16 }, color: cGrid, thickness: 1 });
+          p4.drawText(d.mark, { x: 95, y, size: 10.5, font: fontBold, color: cSky });
+          p4.drawText(d.loc, { x: 210, y, size: 10, font: fontBold, color: cSlate });
+          p4.drawText(d.size, { x: 470, y, size: 10, font: fontReg, color: cSlate });
+          p4.drawText(d.mat, { x: 640, y, size: 10, font: fontReg, color: cSlate });
+          p4.drawText(d.fire, { x: 880, y, size: 10, font: fontBold, color: cAmber });
+        });
+
+        drawDetailBubble(p4, 960, 175, '1', 'A101', 'BACK TO FLOOR PLAN');
+
+        const pdfBytes = await pdfDoc.save();
+        const arrayBuffer = pdfBytes.buffer.slice(pdfBytes.byteOffset, pdfBytes.byteOffset + pdfBytes.byteLength);
+
+        const docId = 'sample_commercial_set';
+        const docMeta = {
+          docId,
+          name: 'Riverfront Commercial Set (Sample)',
+          source: 'sample',
+          dropboxPath: '',
+          size: arrayBuffer.byteLength,
+          modifiedAt: new Date().toISOString(),
+          numPages: 4,
+          pageLabels: [
+            'A101 - Overall Foundation & Floor Plan',
+            'S101 - Structural Footing & Pier Plan',
+            'S201 - Typical Wall & Grade Beam Sections',
+            'A301 - Building Elevations & Door Schedule'
+          ],
+          isOffline: true
+        };
+
+        await ProDrawDB.saveDocument(docMeta, arrayBuffer);
+        state.documents.set(docId, docMeta);
+        state.memoryBlobs.set(docId, arrayBuffer);
+
+        // Pre-seed Procore-style cross-sheet callout links matching the bubbles on pages 1-4
+        const seedLinks = [
+          {
+            id: 'seed_lnk_1',
+            sourceDocId: docId,
+            sourcePage: 1,
+            targetDocId: docId,
+            targetPage: 2,
+            label: '2 / S101 - Structural Footing & Pier Plan',
+            shape: 'circle',
+            xPct: 16.2,
+            yPct: 23.6,
+            wPct: 4.1,
+            hPct: 6.0
+          },
+          {
+            id: 'seed_lnk_2',
+            sourceDocId: docId,
+            sourcePage: 1,
+            targetDocId: docId,
+            targetPage: 3,
+            label: '3 / S201 - Exterior Footing Detail',
+            shape: 'circle',
+            xPct: 42.4,
+            yPct: 24.8,
+            wPct: 4.1,
+            hPct: 6.0
+          },
+          {
+            id: 'seed_lnk_3',
+            sourceDocId: docId,
+            sourcePage: 1,
+            targetDocId: docId,
+            targetPage: 4,
+            label: '4 / A301 - South Elevation & Doors',
+            shape: 'circle',
+            xPct: 68.6,
+            yPct: 71.0,
+            wPct: 4.1,
+            hPct: 6.0
+          },
+          {
+            id: 'seed_lnk_4',
+            sourceDocId: docId,
+            sourcePage: 2,
+            targetDocId: docId,
+            targetPage: 3,
+            label: '3 / S201 - Grade Beam Section',
+            shape: 'circle',
+            xPct: 29.3,
+            yPct: 39.8,
+            wPct: 4.1,
+            hPct: 6.0
+          },
+          {
+            id: 'seed_lnk_5',
+            sourceDocId: docId,
+            sourcePage: 2,
+            targetDocId: docId,
+            targetPage: 1,
+            label: '1 / A101 - Architectural Floor Plan',
+            shape: 'circle',
+            xPct: 55.5,
+            yPct: 55.4,
+            wPct: 4.1,
+            hPct: 6.0
+          },
+          {
+            id: 'seed_lnk_6',
+            sourceDocId: docId,
+            sourcePage: 3,
+            targetDocId: docId,
+            targetPage: 2,
+            label: '2 / S101 - Structural Footing Plan',
+            shape: 'circle',
+            xPct: 9.2,
+            yPct: 58.9,
+            wPct: 4.1,
+            hPct: 6.0
+          },
+          {
+            id: 'seed_lnk_7',
+            sourceDocId: docId,
+            sourcePage: 3,
+            targetDocId: docId,
+            targetPage: 1,
+            label: '1 / A101 - Return to Floor Plan',
+            shape: 'circle',
+            xPct: 70.6,
+            yPct: 55.4,
+            wPct: 4.1,
+            hPct: 6.0
+          },
+          {
+            id: 'seed_lnk_8',
+            sourceDocId: docId,
+            sourcePage: 4,
+            targetDocId: docId,
+            targetPage: 1,
+            label: '1 / A101 - Back to Floor Plan',
+            shape: 'circle',
+            xPct: 72.1,
+            yPct: 76.8,
+            wPct: 4.1,
+            hPct: 6.0
+          }
+        ];
+
+        // Remove any old sample seed links and save fresh ones
+        state.links = state.links.filter((l) => l.sourceDocId !== docId);
+        for (const lnk of seedLinks) {
+          state.links.push(lnk);
+          await ProDrawDB.saveLink(lnk);
+        }
+
+        return docMeta;
+      }
+
+      // ---------------------------------------------------------------------
+      // PDF LOADING & HIGH-DPI DEBOUNCED CANVAS RENDERING
+      // ---------------------------------------------------------------------
+      async function getDocumentArrayBuffer(docId) {
+        if (state.memoryBlobs.has(docId)) {
+          return state.memoryBlobs.get(docId);
+        }
+
+        // Seamless fallback to IndexedDB offline storage
+        const cachedBlob = await ProDrawDB.getBlob(docId);
+        if (cachedBlob) {
+          state.memoryBlobs.set(docId, cachedBlob);
+          return cachedBlob;
+        }
+
+        // If not in IndexedDB and it's a Dropbox document, download if online
+        const meta = state.documents.get(docId);
+        if (meta && meta.source === 'dropbox' && meta.dropboxPath) {
+          if (!navigator.onLine) {
+            throw new Error('You are offline and this Dropbox PDF is not saved in your Offline Library.');
+          }
+          const buf = await DropboxOAuth.downloadFile(meta.dropboxPath);
+          state.memoryBlobs.set(docId, buf);
+          return buf;
+        }
+
+        throw new Error('PDF data could not be loaded.');
+      }
+
+      async function getOrLoadPdfProxy(docId) {
+        if (state.pdfProxyCache.has(docId)) {
+          return state.pdfProxyCache.get(docId);
+        }
+        const buf = await getDocumentArrayBuffer(docId);
+        const clonedSlice = buf.slice(0);
+        const pdfProxy = await pdfjsLib.getDocument({ data: clonedSlice }).promise;
+        state.pdfProxyCache.set(docId, pdfProxy);
+
+        // Update page count & extract page labels if not yet populated
+        const meta = state.documents.get(docId);
+        if (meta && (!meta.pageLabels || meta.pageLabels.length !== pdfProxy.numPages)) {
+          meta.numPages = pdfProxy.numPages;
+          const labels = [];
+          for (let p = 1; p <= pdfProxy.numPages; p++) {
+            const page = await pdfProxy.getPage(p);
+            const tc = await page.getTextContent();
+            const sheetMatch = tc.items
+              .map((it) => it.str.trim())
+              .find((s) => /^[GCASMEPLTF]-?\d{3}(?:\.\d+)?$/i.test(s));
+            labels.push(sheetMatch ? `${sheetMatch.toUpperCase()} (Page ${p})` : `Page ${p} of ${pdfProxy.numPages}`);
+          }
+          meta.pageLabels = labels;
+          if (meta.isOffline) {
+            await ProDrawDB.saveDocument(meta);
+          }
+        }
+
+        return pdfProxy;
+      }
+
+      function applyViewportTransform() {
+        const stage = document.getElementById('sheetStage');
+        const relScale = state.zoom / state.renderedScale;
+        stage.style.transform = `translate3d(${state.panX}px, ${state.panY}px, 0) scale(${relScale})`;
+        document.getElementById('zoomLevelText').textContent = `${Math.round(state.zoom * 100)}%`;
+      }
+
+      function scheduleHighDpiRerender() {
+        clearTimeout(state.renderDebounceTimer);
+        state.renderDebounceTimer = setTimeout(() => {
+          renderActiveBlueprintPage(false);
+        }, 160);
+      }
+
+      async function renderActiveBlueprintPage(fitOnOpen = false) {
+        const docId = state.activeDocId;
+        const pageNum = state.activePage;
+        if (!docId) return;
+
+        const renderId = ++state.activeRenderId;
+        const overlay = document.getElementById('viewerLoadingOverlay');
+
+        try {
+          if (fitOnOpen) overlay.classList.remove('hidden');
+
+          const pdfProxy = await getOrLoadPdfProxy(docId);
+          if (renderId !== state.activeRenderId) return;
+
+          const safePage = Math.max(1, Math.min(pdfProxy.numPages, pageNum));
+          state.activePage = safePage;
+
+          const page = await pdfProxy.getPage(safePage);
+          const unscaled = page.getViewport({ scale: 1.0 });
+          state.baseWidth = unscaled.width;
+          state.baseHeight = unscaled.height;
+
+          const wIn = Math.round(unscaled.width / 36);
+          const hIn = Math.round(unscaled.height / 36);
+          document.getElementById('telemetrySheetSize').textContent = `${wIn}" × ${hIn}"`;
+
+          if (fitOnOpen) {
+            fitViewport('page', false);
+          }
+
+          const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+          const maxPixels = 4096;
+          let targetScale = Math.max(1.0, state.zoom);
+          if (state.baseWidth * targetScale * dpr > maxPixels) {
+            targetScale = maxPixels / (state.baseWidth * dpr);
+          }
+          if (state.baseHeight * targetScale * dpr > maxPixels) {
+            targetScale = Math.min(targetScale, maxPixels / (state.baseHeight * dpr));
+          }
+
+          const renderViewport = page.getViewport({ scale: targetScale * dpr });
+          const cssW = state.baseWidth * targetScale;
+          const cssH = state.baseHeight * targetScale;
+
+          const offscreen = document.createElement('canvas');
+          offscreen.width = Math.floor(renderViewport.width);
+          offscreen.height = Math.floor(renderViewport.height);
+          const offCtx = offscreen.getContext('2d', { alpha: false });
+
+          await page.render({ canvasContext: offCtx, viewport: renderViewport }).promise;
+          if (renderId !== state.activeRenderId) return;
+
+          const canvas = document.getElementById('blueprintCanvas');
+          const stage = document.getElementById('sheetStage');
+          const ctx = canvas.getContext('2d', { alpha: false });
+
+          canvas.width = offscreen.width;
+          canvas.height = offscreen.height;
+          canvas.style.width = `${cssW}px`;
+          canvas.style.height = `${cssH}px`;
+          stage.style.width = `${cssW}px`;
+          stage.style.height = `${cssH}px`;
+
+          ctx.drawImage(offscreen, 0, 0);
+          state.renderedScale = targetScale;
+
+          applyViewportTransform();
+          renderCalloutOverlays();
+          updateViewerHeaderControls();
+        } catch (err) {
+          console.error('Blueprint render error:', err);
+          showToast(err.message || 'Unable to render blueprint.', 'error', 4500);
+        } finally {
+          if (renderId === state.activeRenderId) {
+            overlay.classList.add('hidden');
+          }
+        }
+      }
+
+      function fitViewport(mode = 'page', triggerRender = true) {
+        const vp = document.getElementById('blueprintViewport');
+        const rect = vp.getBoundingClientRect();
+        const pad = 32;
+        const availW = Math.max(120, rect.width - pad * 2);
+        const availH = Math.max(120, rect.height - pad * 2);
+
+        let targetZoom = 1;
+        if (mode === 'width') {
+          targetZoom = availW / state.baseWidth;
+        } else if (mode === '100') {
+          targetZoom = 1.0;
+        } else {
+          targetZoom = Math.min(availW / state.baseWidth, availH / state.baseHeight);
+        }
+
+        state.zoom = Math.max(state.minZoom, Math.min(state.maxZoom, targetZoom));
+        state.panX = (rect.width - state.baseWidth * state.zoom) / 2;
+        state.panY = (rect.height - state.baseHeight * state.zoom) / 2;
+
+        applyViewportTransform();
+        if (triggerRender) scheduleHighDpiRerender();
+      }
+
+      function zoomAtClientPoint(nextZoom, clientX, clientY) {
+        const vp = document.getElementById('blueprintViewport');
+        const rect = vp.getBoundingClientRect();
+        const localX = clientX - rect.left;
+        const localY = clientY - rect.top;
+
+        const clamped = Math.max(state.minZoom, Math.min(state.maxZoom, nextZoom));
+        if (Math.abs(clamped - state.zoom) < 0.0001) return;
+
+        const sheetX = (localX - state.panX) / state.zoom;
+        const sheetY = (localY - state.panY) / state.zoom;
+
+        state.zoom = clamped;
+        state.panX = localX - sheetX * state.zoom;
+        state.panY = localY - sheetY * state.zoom;
+
+        applyViewportTransform();
+        scheduleHighDpiRerender();
+      }
+
+      function zoomByStep(factor) {
+        const vp = document.getElementById('blueprintViewport');
+        const rect = vp.getBoundingClientRect();
+        zoomAtClientPoint(state.zoom * factor, rect.left + rect.width / 2, rect.top + rect.height / 2);
+      }
+
+      // ---------------------------------------------------------------------
+      // OPEN BLUEPRINT DOCUMENT & MULTI-PAGE THUMBNAIL STRIP
+      // ---------------------------------------------------------------------
+      async function openBlueprintDocument(docId, pageNumber = 1, options = {}) {
+        const meta = state.documents.get(docId);
+        if (!meta) return;
+
+        state.activeDocId = docId;
+        state.activePage = pageNumber;
+
+        if (options.pulse) {
+          const badge = document.getElementById('activeDocBadge');
+          badge.classList.remove('sheet-jump-pulse');
+          void badge.offsetWidth;
+          badge.classList.add('sheet-jump-pulse');
+        }
+
+        await renderActiveBlueprintPage(!options.preserveTransform);
+        renderPageThumbnailsStrip();
+        renderLinksDirectorySidebar();
+        renderOfflineLibrarySidebar();
+      }
+
+      function updateViewerHeaderControls() {
+        const meta = state.documents.get(state.activeDocId);
+        if (!meta) return;
+
+        const sourceTag = document.getElementById('activeSourceTag');
+        const badgeStyles = {
+          sample: 'bg-amber-500/20 text-amber-300 border-amber-500/30',
+          dropbox: 'bg-sky-500/20 text-sky-300 border-sky-500/30',
+          local: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+        };
+        sourceTag.className = `text-[10px] font-mono uppercase px-1.5 py-0.2 rounded border shrink-0 ${
+          badgeStyles[meta.source] || badgeStyles.local
+        }`;
+        sourceTag.textContent = meta.source.toUpperCase();
+        document.getElementById('activeDocTitle').textContent = meta.name;
+
+        // Populate Page Switcher Dropdown
+        const pageSelect = document.getElementById('pageSelectDropdown');
+        pageSelect.innerHTML = '';
+        const total = meta.numPages || 1;
+        for (let p = 1; p <= total; p++) {
+          const opt = document.createElement('option');
+          opt.value = String(p);
+          opt.textContent = (meta.pageLabels && meta.pageLabels[p - 1]) || `Page ${p} of ${total}`;
+          if (p === state.activePage) opt.selected = true;
+          pageSelect.appendChild(opt);
+        }
+
+        document.getElementById('prevPageBtn').disabled = state.activePage <= 1;
+        document.getElementById('nextPageBtn').disabled = state.activePage >= total;
+        document.getElementById('sidebarPageCounter').textContent = `${state.activePage} / ${total}`;
+
+        // Update Offline Save Button State
+        const saveBtn = document.getElementById('saveCurrentOfflineBtn');
+        const saveLabel = document.getElementById('saveCurrentOfflineLabel');
+        const saveIcon = document.getElementById('saveCurrentOfflineIcon');
+        if (meta.isOffline) {
+          saveBtn.className =
+            'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-950/90 hover:bg-emerald-900 text-emerald-300 border border-emerald-700/70 transition shrink-0';
+          saveLabel.textContent = 'Offline Ready';
+          saveIcon.setAttribute('data-lucide', 'check-circle-2');
+        } else {
+          saveBtn.className =
+            'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-700 hover:bg-slate-600 text-amber-300 border border-amber-500/40 transition shrink-0';
+          saveLabel.textContent = 'Save Offline';
+          saveIcon.setAttribute('data-lucide', 'download-cloud');
+        }
+        if (window.lucide) lucide.createIcons({ nodes: [saveBtn] });
+      }
+
+      async function renderPageThumbnailsStrip() {
+        const strip = document.getElementById('pageThumbnailsStrip');
+        strip.innerHTML = '';
+        const meta = state.documents.get(state.activeDocId);
+        if (!meta) return;
+
+        let pdfProxy = null;
+        try {
+          pdfProxy = await getOrLoadPdfProxy(meta.docId);
+        } catch {
+          return;
+        }
+
+        const total = pdfProxy.numPages;
+        for (let p = 1; p <= total; p++) {
+          const isCurrent = p === state.activePage;
+          const card = document.createElement('button');
+          card.type = 'button';
+          card.className = `shrink-0 rounded-lg p-1 border text-left transition flex flex-col items-center gap-1 ${
+            isCurrent
+              ? 'bg-slate-800 border-amber-400 ring-1 ring-amber-400'
+              : 'bg-slate-900 border-slate-800 hover:border-slate-600'
+          }`;
+
+          const thumbCanvas = document.createElement('canvas');
+          thumbCanvas.className = 'w-16 h-11 bg-white rounded-xs block';
+          card.appendChild(thumbCanvas);
+
+          const caption = document.createElement('span');
+          caption.className = `font-mono text-[10px] font-bold truncate max-w-[66px] ${
+            isCurrent ? 'text-amber-300' : 'text-slate-400'
+          }`;
+          const shortCode = ((meta.pageLabels && meta.pageLabels[p - 1]) || `P${p}`).split(' ')[0];
+          caption.textContent = shortCode;
+          card.appendChild(caption);
+
+          card.addEventListener('click', () => {
+            openBlueprintDocument(meta.docId, p);
+          });
+
+          strip.appendChild(card);
+
+          // Render mini thumbnail asynchronously
+          pdfProxy.getPage(p).then(async (page) => {
+            const vp0 = page.getViewport({ scale: 1.0 });
+            const scale = Math.min(128 / vp0.width, 88 / vp0.height);
+            const vp = page.getViewport({ scale });
+            thumbCanvas.width = Math.floor(vp.width);
+            thumbCanvas.height = Math.floor(vp.height);
+            await page.render({ canvasContext: thumbCanvas.getContext('2d'), viewport: vp }).promise;
+          });
+        }
+      }
+
+      // ---------------------------------------------------------------------
+      // PROCORE-STYLE CROSS-SHEET CALLOUT OVERLAYS & NAVIGATION HISTORY
+      // ---------------------------------------------------------------------
+      function renderCalloutOverlays() {
+        const container = document.getElementById('calloutOverlayContainer');
+        container.innerHTML = '';
+
+        const pageLinks = state.links.filter(
+          (l) => l.sourceDocId === state.activeDocId && Number(l.sourcePage) === Number(state.activePage)
+        );
+        document.getElementById('activePageLinkCount').textContent = pageLinks.length;
+
+        if (!state.showLinks) return;
+
+        pageLinks.forEach((link) => {
+          const targetMeta = state.documents.get(link.targetDocId);
+          const hotspot = document.createElement('div');
+          hotspot.className = `callout-hotspot ${link.shape === 'rect' ? 'shape-rect' : 'shape-circle'} ${
+            state.linkToolActive ? 'link-tool-active' : ''
+          }`;
+          hotspot.style.left = `${link.xPct}%`;
+          hotspot.style.top = `${link.yPct}%`;
+          hotspot.style.width = `${link.wPct}%`;
+          hotspot.style.height = `${link.hPct}%`;
+
+          // Hover tooltip
+          hotspot.addEventListener('mouseenter', (e) => showCalloutTooltip(e, link, targetMeta));
+          hotspot.addEventListener('mousemove', (e) => positionCalloutTooltip(e));
+          hotspot.addEventListener('mouseleave', hideCalloutTooltip);
+
+          // Left-click: Navigate to referenced sheet (or edit if Link Tool is active)
+          hotspot.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            hideCalloutTooltip();
+            if (state.linkToolActive) {
+              openEditCalloutModal(link);
+              return;
+            }
+            await followCalloutLink(link);
+          });
+
+          // Right-click: Edit callout anytime
+          hotspot.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            hideCalloutTooltip();
+            openEditCalloutModal(link);
+          });
+
+          container.appendChild(hotspot);
+        });
+      }
+
+      function showCalloutTooltip(e, link, targetMeta) {
+        const tip = document.getElementById('calloutHoverTooltip');
+        document.getElementById('tipCalloutLabel').textContent = link.label || `Page ${link.targetPage}`;
+        const docName = targetMeta ? targetMeta.name : 'Blueprint';
+        const pageLabel =
+          targetMeta?.pageLabels?.[link.targetPage - 1] || `Page ${link.targetPage}`;
+        document.getElementById('tipTargetInfo').textContent = `${docName} • ${pageLabel}`;
+        tip.classList.remove('hidden');
+        positionCalloutTooltip(e);
+      }
+
+      function positionCalloutTooltip(e) {
+        const tip = document.getElementById('calloutHoverTooltip');
+        let x = e.clientX + 14;
+        let y = e.clientY + 14;
+        if (x + 270 > window.innerWidth) x = e.clientX - 270;
+        if (y + 76 > window.innerHeight) y = e.clientY - 76;
+        tip.style.left = `${Math.max(8, x)}px`;
+        tip.style.top = `${Math.max(8, y)}px`;
+      }
+
+      function hideCalloutTooltip() {
+        document.getElementById('calloutHoverTooltip').classList.add('hidden');
+      }
+
+      async function followCalloutLink(link) {
+        const currentDoc = state.documents.get(state.activeDocId);
+        if (!state.documents.has(link.targetDocId)) {
+          showToast('Target blueprint is no longer loaded.', 'warning');
+          return;
+        }
+
+        // Push origin sheet/page/zoom onto navigation history stack
+        if (currentDoc) {
+          const originSheetLabel =
+            currentDoc.pageLabels?.[state.activePage - 1] || `${currentDoc.name} - Page ${state.activePage}`;
+          state.navStack.push({
+            docId: state.activeDocId,
+            page: state.activePage,
+            label: `${originSheetLabel} - Page ${state.activePage}`,
+            zoom: state.zoom,
+            panX: state.panX,
+            panY: state.panY
+          });
+          updateNavBackButtonUI();
+        }
+
+        await openBlueprintDocument(link.targetDocId, Number(link.targetPage), { pulse: true });
+      }
+
+      function updateNavBackButtonUI() {
+        const btn = document.getElementById('navHistoryBackBtn');
+        const txt = document.getElementById('navHistoryBackText');
+        if (state.navStack.length === 0) {
+          btn.classList.add('hidden');
+          return;
+        }
+        const top = state.navStack[state.navStack.length - 1];
+        txt.textContent = `← Back to ${top.label}`;
+        btn.classList.remove('hidden');
+      }
+
+      async function handleBackHistoryClick() {
+        if (state.navStack.length === 0) return;
+        const prev = state.navStack.pop();
+        updateNavBackButtonUI();
+
+        await openBlueprintDocument(prev.docId, prev.page, { pulse: true, preserveTransform: true });
+        state.zoom = prev.zoom;
+        state.panX = prev.panX;
+        state.panY = prev.panY;
+        applyViewportTransform();
+        scheduleHighDpiRerender();
+      }
+
+      // ---------------------------------------------------------------------
+      // CREATE / EDIT CALLOUT MODAL (WITH LIVE TARGET SHEET PREVIEW)
+      // ---------------------------------------------------------------------
+      function openCreateCalloutModal(boxPct) {
+        state.pendingBoxPct = boxPct;
+        state.editingLinkId = null;
+        state.modalShape = 'circle';
+
+        document.getElementById('calloutModalHeading').textContent = 'Create Cross-Sheet Callout Link';
+        document.getElementById('calloutLabelInput').value = '';
+        document.getElementById('deleteCalloutLinkBtn').classList.add('hidden');
+
+        updateModalHotspotShapeUI('circle');
+        populateCalloutTargetDropdowns(state.activeDocId, Math.min(state.activePage + 1, state.documents.get(state.activeDocId)?.numPages || 1));
+
+        document.getElementById('calloutLinkModal').classList.remove('hidden');
+        document.getElementById('calloutLabelInput').focus();
+      }
+
+      function openEditCalloutModal(link) {
+        state.editingLinkId = link.id;
+        state.pendingBoxPct = { xPct: link.xPct, yPct: link.yPct, wPct: link.wPct, hPct: link.hPct };
+        state.modalShape = link.shape || 'circle';
+
+        document.getElementById('calloutModalHeading').textContent = 'Edit Cross-Sheet Callout Link';
+        document.getElementById('calloutLabelInput').value = link.label || '';
+        document.getElementById('deleteCalloutLinkBtn').classList.remove('hidden');
+
+        updateModalHotspotShapeUI(state.modalShape);
+        populateCalloutTargetDropdowns(link.targetDocId, link.targetPage);
+
+        document.getElementById('calloutLinkModal').classList.remove('hidden');
+      }
+
+      function closeCalloutModal() {
+        document.getElementById('calloutLinkModal').classList.add('hidden');
+        state.pendingBoxPct = null;
+        state.editingLinkId = null;
+      }
+
+      function updateModalHotspotShapeUI(shape) {
+        state.modalShape = shape;
+        const cBtn = document.getElementById('hotspotShapeCircleBtn');
+        const rBtn = document.getElementById('hotspotShapeRectBtn');
+        if (shape === 'circle') {
+          cBtn.className = 'py-1.5 px-3 rounded-xl border-2 border-sky-600 bg-sky-50 text-sky-900 font-semibold flex items-center justify-center gap-1.5';
+          rBtn.className = 'py-1.5 px-3 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 font-semibold flex items-center justify-center gap-1.5';
+        } else {
+          rBtn.className = 'py-1.5 px-3 rounded-xl border-2 border-sky-600 bg-sky-50 text-sky-900 font-semibold flex items-center justify-center gap-1.5';
+          cBtn.className = 'py-1.5 px-3 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 font-semibold flex items-center justify-center gap-1.5';
+        }
+      }
+
+      function populateCalloutTargetDropdowns(selectedDocId, selectedPage = 1) {
+        const docSelect = document.getElementById('calloutTargetDocSelect');
+        docSelect.innerHTML = '';
+
+        // Combine all loaded/offline documents + any Dropbox PDFs currently visible in browser
+        const allDocs = Array.from(state.documents.values());
+        allDocs.forEach((doc) => {
+          const opt = document.createElement('option');
+          opt.value = doc.docId;
+          opt.textContent = `[${doc.source.toUpperCase()}] ${doc.name} (${doc.numPages || 1} pg)`;
+          if (doc.docId === selectedDocId) opt.selected = true;
+          docSelect.appendChild(opt);
+        });
+
+        updateTargetPageDropdownAndPreview(docSelect.value, selectedPage);
+      }
+
+      async function updateTargetPageDropdownAndPreview(targetDocId, preferredPage = 1) {
+        const pageSelect = document.getElementById('calloutTargetPageSelect');
+        pageSelect.innerHTML = '';
+
+        const meta = state.documents.get(targetDocId);
+        const totalPages = meta?.numPages || 1;
+        const safePage = Math.max(1, Math.min(totalPages, Number(preferredPage) || 1));
+
+        for (let p = 1; p <= totalPages; p++) {
+          const opt = document.createElement('option');
+          opt.value = String(p);
+          opt.textContent = (meta?.pageLabels && meta.pageLabels[p - 1]) || `Page ${p} of ${totalPages}`;
+          if (p === safePage) opt.selected = true;
+          pageSelect.appendChild(opt);
+        }
+
+        await renderLiveTargetSheetPreview(targetDocId, safePage);
+      }
+
+      async function renderLiveTargetSheetPreview(targetDocId, pageNum) {
+        const canvas = document.getElementById('targetSheetPreviewCanvas');
+        const statusEl = document.getElementById('targetSheetPreviewStatus');
+        const badgeEl = document.getElementById('previewTargetPageBadge');
+        badgeEl.textContent = `Page ${pageNum}`;
+
+        try {
+          canvas.classList.remove('hidden');
+          statusEl.classList.add('hidden');
+          const pdfProxy = await getOrLoadPdfProxy(targetDocId);
+          const page = await pdfProxy.getPage(Math.max(1, Math.min(pdfProxy.numPages, pageNum)));
+          const vp0 = page.getViewport({ scale: 1.0 });
+          const scale = Math.min(360 / vp0.width, 220 / vp0.height);
+          const vp = page.getViewport({ scale });
+
+          canvas.width = Math.floor(vp.width);
+          canvas.height = Math.floor(vp.height);
+          await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+        } catch (err) {
+          canvas.classList.add('hidden');
+          statusEl.textContent = 'Preview unavailable until PDF is downloaded.';
+          statusEl.classList.remove('hidden');
+        }
+      }
+
+      async function saveCalloutFromModal() {
+        if (!state.activeDocId || !state.pendingBoxPct) return;
+
+        const targetDocId = document.getElementById('calloutTargetDocSelect').value;
+        const targetPage = Number(document.getElementById('calloutTargetPageSelect').value) || 1;
+        const rawLabel = document.getElementById('calloutLabelInput').value.trim();
+        const targetMeta = state.documents.get(targetDocId);
+        const defaultLabel =
+          targetMeta?.pageLabels?.[targetPage - 1] || `${targetMeta?.name || 'Sheet'} - Page ${targetPage}`;
+        const label = rawLabel || defaultLabel;
+
+        if (state.editingLinkId) {
+          const idx = state.links.findIndex((l) => l.id === state.editingLinkId);
+          if (idx >= 0) {
+            state.links[idx] = {
+              ...state.links[idx],
+              label,
+              targetDocId,
+              targetPage,
+              shape: state.modalShape
+            };
+            await ProDrawDB.saveLink(state.links[idx]);
+          }
+          showToast('Callout link updated.', 'success');
+        } else {
+          const newLink = {
+            id: `lnk_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+            sourceDocId: state.activeDocId,
+            sourcePage: state.activePage,
+            targetDocId,
+            targetPage,
+            label,
+            shape: state.modalShape,
+            xPct: Number(state.pendingBoxPct.xPct.toFixed(3)),
+            yPct: Number(state.pendingBoxPct.yPct.toFixed(3)),
+            wPct: Number(state.pendingBoxPct.wPct.toFixed(3)),
+            hPct: Number(state.pendingBoxPct.hPct.toFixed(3))
+          };
+          state.links.push(newLink);
+          await ProDrawDB.saveLink(newLink);
+          showToast(`Callout link "${label}" saved.`, 'success');
+        }
+
+        closeCalloutModal();
+        renderCalloutOverlays();
+        renderLinksDirectorySidebar();
+      }
+
+      async function deleteActiveCalloutFromModal() {
+        if (!state.editingLinkId) return;
+        const id = state.editingLinkId;
+        state.links = state.links.filter((l) => l.id !== id);
+        await ProDrawDB.deleteLink(id);
+
+        closeCalloutModal();
+        renderCalloutOverlays();
+        renderLinksDirectorySidebar();
+        showToast('Callout link deleted.', 'info');
+      }
+
+      // ---------------------------------------------------------------------
+      // EXPORT & IMPORT CALLOUT LINKS (.JSON)
+      // ---------------------------------------------------------------------
+      function exportLinksToJsonFile() {
+        const payload = {
+          app: 'ProDraw Blueprints',
+          version: 1,
+          exportedAt: new Date().toISOString(),
+          links: state.links
+        };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `prodraw_callout_links_${new Date().toISOString().slice(0, 10)}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast(`Exported ${state.links.length} callout link(s) to JSON.`, 'success');
+      }
+
+      async function importLinksFromJsonFile(file) {
+        if (!file) return;
+        try {
+          const text = await file.text();
+          const parsed = JSON.parse(text);
+          if (!Array.isArray(parsed.links)) {
+            throw new Error('Invalid JSON file: expected a "links" array.');
+          }
+
+          let added = 0;
+          for (const item of parsed.links) {
+            if (!item.sourceDocId || !item.targetDocId) continue;
+            const linkObj = {
+              id: item.id || `lnk_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+              sourceDocId: item.sourceDocId,
+              sourcePage: Number(item.sourcePage) || 1,
+              targetDocId: item.targetDocId,
+              targetPage: Number(item.targetPage) || 1,
+              label: item.label || `Page ${item.targetPage || 1}`,
+              shape: item.shape === 'rect' ? 'rect' : 'circle',
+              xPct: Number(item.xPct) || 10,
+              yPct: Number(item.yPct) || 10,
+              wPct: Number(item.wPct) || 4.2,
+              hPct: Number(item.hPct) || 6.0
+            };
+
+            const existingIdx = state.links.findIndex((l) => l.id === linkObj.id);
+            if (existingIdx >= 0) state.links[existingIdx] = linkObj;
+            else state.links.push(linkObj);
+
+            await ProDrawDB.saveLink(linkObj);
+            added++;
+          }
+
+          renderCalloutOverlays();
+          renderLinksDirectorySidebar();
+          showToast(`Imported ${added} callout link(s) into IndexedDB.`, 'success');
+        } catch (err) {
+          console.error('Import links error:', err);
+          showToast(`JSON Import failed: ${err.message}`, 'error');
+        }
+      }
+
+      // ---------------------------------------------------------------------
+      // DROPBOX BROWSER, OFFLINE LIBRARY & SHEET LINKS SIDEBAR RENDERING
+      // ---------------------------------------------------------------------
+      function updateDropboxUIStatus() {
+        const connected = DropboxOAuth.isConnected();
+        const label = DropboxOAuth.getAccountSummary() || 'Connected (Read-Only)';
+
+        const headerDot = document.getElementById('dbxHeaderDot');
+        const headerText = document.getElementById('dbxHeaderAccountLabel');
+        const testBtn = document.getElementById('dbxTestConnBtn');
+        const discBtn = document.getElementById('dbxHeaderDisconnectBtn');
+
+        const modalDot = document.getElementById('dbxModalStatusDot');
+        const modalHead = document.getElementById('dbxModalStatusHeading');
+        const modalTest = document.getElementById('dbxModalTestBtn');
+        const modalDisc = document.getElementById('dbxModalDisconnectBtn');
+
+        if (connected) {
+          headerDot.className = 'w-2 h-2 rounded-full bg-emerald-400';
+          headerText.textContent = label;
+          testBtn.classList.remove('hidden');
+          discBtn.classList.remove('hidden');
+
+          modalDot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-500';
+          modalHead.textContent = label;
+          modalTest.classList.remove('hidden');
+          modalDisc.classList.remove('hidden');
+        } else {
+          headerDot.className = 'w-2 h-2 rounded-full bg-slate-400';
+          headerText.textContent = 'Connect Dropbox';
+          testBtn.classList.add('hidden');
+          discBtn.classList.add('hidden');
+
+          modalDot.className = 'w-2.5 h-2.5 rounded-full bg-slate-400';
+          modalHead.textContent = 'Not Connected';
+          modalTest.classList.add('hidden');
+          modalDisc.classList.add('hidden');
+        }
+      }
+
+      function openDropboxAuthModal() {
+        document.getElementById('dbxClientIdInput').value = DropboxOAuth.getClientId();
+        document.getElementById('dbxRedirectUriDisplay').value = DropboxOAuth.getRedirectUri();
+        DropboxOAuth.showAuthError('');
+        updateDropboxUIStatus();
+        document.getElementById('dropboxAuthModal').classList.remove('hidden');
+      }
+
+      function switchDropboxAuthMode(mode) {
+        state.dbxAuthMode = mode;
+        const btnA = document.getElementById('selectModeABtn');
+        const btnB = document.getElementById('selectModeBBtn');
+        const panelA = document.getElementById('dbxModeAPanel');
+        const panelB = document.getElementById('dbxModeBPanel');
+
+        if (mode === 'modeA') {
+          btnA.className = 'p-2.5 rounded-xl border-2 border-sky-600 bg-sky-50/80 text-left transition';
+          btnB.className = 'p-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-left transition';
+          panelA.classList.remove('hidden');
+          panelB.classList.add('hidden');
+        } else {
+          btnB.className = 'p-2.5 rounded-xl border-2 border-sky-600 bg-sky-50/80 text-left transition';
+          btnA.className = 'p-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-left transition';
+          panelB.classList.remove('hidden');
+          panelA.classList.add('hidden');
+        }
+      }
+
+      async function loadDropboxFolder(path = '') {
+        state.dbxCurrentPath = path;
+        renderDropboxBreadcrumbs();
+
+        const listEl = document.getElementById('dbxBrowserList');
+        if (!DropboxOAuth.isConnected()) {
+          renderDropboxBrowserList();
+          return;
+        }
+
+        listEl.innerHTML = `
+          <div class="p-8 text-center text-xs text-slate-400 flex flex-col items-center gap-2">
+            <div class="w-6 h-6 border-2 border-sky-400 border-t-transparent rounded-full animate-spin"></div>
+            <span>Loading Dropbox folder...</span>
+          </div>`;
+
+        try {
+          const entries = await DropboxOAuth.listFolder(path);
+          state.dbxEntries = entries;
+
+          // Register Dropbox PDFs in state.documents so they appear in target dropdowns & seamless offline lookup
+          entries.forEach((entry) => {
+            if (entry['.tag'] === 'file' && entry.name.toLowerCase().endsWith('.pdf')) {
+              const docId = `dbx_${entry.path_lower}`;
+              if (!state.documents.has(docId)) {
+                state.documents.set(docId, {
+                  docId,
+                  name: entry.name,
+                  source: 'dropbox',
+                  dropboxPath: entry.path_lower,
+                  size: entry.size || 0,
+                  modifiedAt: entry.client_modified || entry.server_modified || '',
+                  numPages: 1,
+                  pageLabels: null,
+                  isOffline: false
+                });
+              }
+            }
+          });
+
+          renderDropboxBrowserList();
+        } catch (err) {
+          console.error('Dropbox folder load error:', err);
+          listEl.innerHTML = `
+            <div class="p-4 rounded-xl bg-rose-950/60 border border-rose-800 text-xs text-rose-200 space-y-2">
+              <div class="font-bold">Unable to load Dropbox folder</div>
+              <div class="text-[11px] text-rose-300 break-words">${escapeHtml(err.message)}</div>
+              <button id="retryDbxAuthBtn" class="px-3 py-1.5 rounded-lg bg-sky-600 text-white font-semibold">
+                Check Connection Settings
+              </button>
+            </div>`;
+          document.getElementById('retryDbxAuthBtn')?.addEventListener('click', openDropboxAuthModal);
+        }
+      }
+
+      function renderDropboxBreadcrumbs() {
+        const container = document.getElementById('dbxBreadcrumbs');
+        container.innerHTML = '';
+
+        const parts = state.dbxCurrentPath.split('/').filter(Boolean);
+        const crumbs = [{ name: 'Dropbox', path: '' }];
+        let running = '';
+        parts.forEach((p) => {
+          running += '/' + p;
+          crumbs.push({ name: p, path: running });
+        });
+
+        crumbs.forEach((c, idx) => {
+          if (idx > 0) {
+            const sep = document.createElement('span');
+            sep.className = 'text-slate-600';
+            sep.textContent = '/';
+            container.appendChild(sep);
+          }
+          const btn = document.createElement('button');
+          btn.className = 'px-1.5 py-0.5 rounded hover:bg-slate-800 text-slate-200 font-semibold shrink-0';
+          btn.textContent = c.name;
+          btn.addEventListener('click', () => loadDropboxFolder(c.path));
+          container.appendChild(btn);
+        });
+      }
+
+      function renderDropboxBrowserList() {
+        const listEl = document.getElementById('dbxBrowserList');
+        const saveAllBtn = document.getElementById('dbxSaveAllFolderOfflineBtn');
+
+        if (!DropboxOAuth.isConnected()) {
+          saveAllBtn.classList.add('hidden');
+          listEl.innerHTML = `
+            <div class="p-5 rounded-xl bg-slate-800/70 border border-slate-700 text-center space-y-3">
+              <div class="w-10 h-10 rounded-xl bg-sky-500/20 text-sky-400 flex items-center justify-center mx-auto">
+                <i data-lucide="cloud" class="w-5 h-5"></i>
+              </div>
+              <div>
+                <div class="text-xs font-bold text-white">Connect Your Dropbox Blueprints</div>
+                <p class="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                  Browse read-only PDF folders, open drawings at high-DPI, and save sets for 100% offline jobsite use.
+                </p>
+              </div>
+              <button id="sidebarPromptConnectDbxBtn"
+                class="w-full py-2 px-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold transition">
+                Connect Dropbox (Read-Only)
+              </button>
+            </div>`;
+          if (window.lucide) lucide.createIcons({ nodes: [listEl] });
+          document.getElementById('sidebarPromptConnectDbxBtn')?.addEventListener('click', openDropboxAuthModal);
+          return;
+        }
+
+        const q = state.dbxSearchQuery.trim().toLowerCase();
+        const filtered = state.dbxEntries
+          .filter((entry) => {
+            const isFolder = entry['.tag'] === 'folder';
+            const isPdf = entry['.tag'] === 'file' && entry.name.toLowerCase().endsWith('.pdf');
+            if (state.dbxPdfOnly && !isFolder && !isPdf) return false;
+            if (q && !entry.name.toLowerCase().includes(q)) return false;
+            return true;
+          })
+          .sort((a, b) => {
+            if (a['.tag'] !== b['.tag']) return a['.tag'] === 'folder' ? -1 : 1;
+            return a.name.localeCompare(b.name);
+          });
+
+        const pdfEntries = filtered.filter((e) => e['.tag'] === 'file' && e.name.toLowerCase().endsWith('.pdf'));
+        if (pdfEntries.length > 0) {
+          saveAllBtn.classList.remove('hidden');
+          document.getElementById('dbxSaveAllFolderText').textContent = `Save All ${pdfEntries.length} PDF(s) in Folder Offline`;
+        } else {
+          saveAllBtn.classList.add('hidden');
+        }
+
+        listEl.innerHTML = '';
+        if (filtered.length === 0) {
+          listEl.innerHTML = `<div class="p-6 text-center text-xs text-slate-400">No matching folders or PDF files found.</div>`;
+          return;
+        }
+
+        filtered.forEach((entry) => {
+          const isFolder = entry['.tag'] === 'folder';
+          const row = document.createElement('div');
+          row.className = 'p-2.5 rounded-xl bg-slate-800/70 hover:bg-slate-800 border border-slate-700/80 flex items-center justify-between gap-2 transition';
+
+          if (isFolder) {
+            row.classList.add('cursor-pointer');
+            row.innerHTML = `
+              <div class="flex items-center gap-2.5 min-w-0">
+                <i data-lucide="folder" class="w-4 h-4 text-amber-400 shrink-0"></i>
+                <span class="text-xs font-semibold text-white truncate">${escapeHtml(entry.name)}</span>
+              </div>
+              <i data-lucide="chevron-right" class="w-4 h-4 text-slate-400 shrink-0"></i>
+            `;
+            row.addEventListener('click', () => loadDropboxFolder(entry.path_lower));
+          } else {
+            const docId = `dbx_${entry.path_lower}`;
+            const docMeta = state.documents.get(docId);
+            const isCachedOffline = Boolean(docMeta?.isOffline);
+
+            row.innerHTML = `
+              <div class="flex items-start gap-2 min-w-0 flex-1 cursor-pointer" data-open-dbx-file="1">
+                <i data-lucide="file-text" class="w-4 h-4 text-sky-400 shrink-0 mt-0.5"></i>
+                <div class="min-w-0 flex-1">
+                  <div class="text-xs font-semibold text-white truncate">${escapeHtml(entry.name)}</div>
+                  <div class="flex items-center gap-2 text-[10px] text-slate-400 font-mono mt-0.5">
+                    <span>${formatBytes(entry.size)}</span>
+                    ${entry.client_modified ? `<span>• ${formatDateShort(entry.client_modified)}</span>` : ''}
+                  </div>
+                  ${
+                    isCachedOffline
+                      ? `<span class="inline-flex items-center gap-1 mt-1 px-1.5 py-0.2 rounded text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                          <i data-lucide="check-circle-2" class="w-2.5 h-2.5"></i> Offline Ready
+                        </span>`
+                      : ''
+                  }
+                </div>
+              </div>
+              <button data-save-dbx-offline="1" title="${isCachedOffline ? 'Already Cached Offline' : 'Save PDF to IndexedDB for Offline Viewing'}"
+                class="p-1.5 rounded-lg border transition shrink-0 ${
+                  isCachedOffline
+                    ? 'bg-emerald-950/80 border-emerald-700 text-emerald-300'
+                    : 'bg-slate-900 hover:bg-slate-700 border-slate-700 text-slate-300'
+                }">
+                <i data-lucide="${isCachedOffline ? 'check' : 'download-cloud'}" class="w-3.5 h-3.5"></i>
+              </button>
+            `;
+
+            row.querySelector('[data-open-dbx-file]').addEventListener('click', async () => {
+              await openBlueprintDocument(docId, 1);
+              if (window.innerWidth < 768) toggleSidebarDrawer(false);
+            });
+
+            row.querySelector('[data-save-dbx-offline]').addEventListener('click', async (e) => {
+              e.stopPropagation();
+              await cacheDropboxFileOffline(entry);
+              renderDropboxBrowserList();
+              renderOfflineLibrarySidebar();
+            });
+          }
+
+          listEl.appendChild(row);
+        });
+
+        if (window.lucide) lucide.createIcons({ nodes: [listEl] });
+      }
+
+      async function cacheDropboxFileOffline(entry) {
+        const docId = `dbx_${entry.path_lower}`;
+        try {
+          showToast(`Downloading "${entry.name}" for offline storage...`, 'info', 2500);
+          const buffer = await getDocumentArrayBuffer(docId);
+          state.memoryBlobs.set(docId, buffer);
+
+          // Parse page count & labels before saving metadata
+          const pdfProxy = await getOrLoadPdfProxy(docId);
+          const existing = state.documents.get(docId) || {
+            docId,
+            name: entry.name,
+            source: 'dropbox',
+            dropboxPath: entry.path_lower,
+            size: buffer.byteLength,
+            modifiedAt: entry.client_modified || new Date().toISOString(),
+            numPages: pdfProxy.numPages,
+            pageLabels: null
+          };
+          existing.size = buffer.byteLength;
+          existing.isOffline = true;
+
+          await ProDrawDB.saveDocument(existing, buffer);
+          state.documents.set(docId, existing);
+          if (state.activeDocId === docId) updateViewerHeaderControls();
+          showToast(`"${entry.name}" is now Offline Ready!`, 'success');
+        } catch (err) {
+          console.error('Cache Dropbox file offline error:', err);
+          showToast(`Offline save failed: ${err.message}`, 'error');
+        }
+      }
+
+      async function cacheAllFolderPdfsOffline() {
+        const pdfEntries = state.dbxEntries.filter(
+          (e) => e['.tag'] === 'file' && e.name.toLowerCase().endsWith('.pdf')
+        );
+        if (pdfEntries.length === 0) return;
+
+        showToast(`Caching ${pdfEntries.length} PDF(s) to IndexedDB...`, 'info', 3500);
+        for (const entry of pdfEntries) {
+          await cacheDropboxFileOffline(entry);
+        }
+        renderDropboxBrowserList();
+        renderOfflineLibrarySidebar();
+        showToast(`All ${pdfEntries.length} folder PDFs saved for offline viewing!`, 'success');
+      }
+
+      function renderOfflineLibrarySidebar() {
+        const listEl = document.getElementById('offlineLibraryList');
+        listEl.innerHTML = '';
+
+        const offlineDocs = Array.from(state.documents.values()).filter((d) => d.isOffline);
+        let totalBytes = 0;
+        offlineDocs.forEach((d) => (totalBytes += d.size || 0));
+
+        document.getElementById('offlineTabCount').textContent = offlineDocs.length;
+        document.getElementById('headerStorageText').textContent = formatBytes(totalBytes);
+        document.getElementById('offlinePanelQuotaText').textContent = `${offlineDocs.length} file(s) • ${formatBytes(totalBytes)} cached`;
+
+        if (offlineDocs.length === 0) {
+          listEl.innerHTML = `
+            <div class="p-6 text-center text-xs text-slate-400">
+              No blueprints cached offline yet. Click "Save Offline" on any Dropbox or local PDF.
+            </div>`;
+          return;
+        }
+
+        offlineDocs.forEach((doc) => {
+          const isCurrent = doc.docId === state.activeDocId;
+          const card = document.createElement('div');
+          card.className = `p-2.5 rounded-xl border flex items-center justify-between gap-2 transition ${
+            isCurrent
+              ? 'bg-slate-800 border-amber-400/80'
+              : 'bg-slate-800/60 hover:bg-slate-800 border-slate-700/80'
+          }`;
+
+          card.innerHTML = `
+            <div class="min-w-0 flex-1 cursor-pointer" data-open-offline="1">
+              <div class="flex items-center gap-1.5">
+                <span class="text-[9px] font-mono uppercase px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                  Offline Ready
+                </span>
+                <span class="text-[10px] font-mono text-slate-400">${doc.numPages || 1} pg</span>
+              </div>
+              <div class="text-xs font-semibold text-white truncate mt-1">${escapeHtml(doc.name)}</div>
+              <div class="text-[10px] font-mono text-slate-400 mt-0.5">${formatBytes(doc.size)} • ${doc.source.toUpperCase()}</div>
+            </div>
+            <button data-remove-offline="1" title="Remove from Offline IndexedDB"
+              class="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-900 transition shrink-0">
+              <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+            </button>
+          `;
+
+          card.querySelector('[data-open-offline]').addEventListener('click', async () => {
+            await openBlueprintDocument(doc.docId, 1);
+            if (window.innerWidth < 768) toggleSidebarDrawer(false);
+          });
+
+          card.querySelector('[data-remove-offline]').addEventListener('click', async (e) => {
+            e.stopPropagation();
+            await ProDrawDB.deleteDocument(doc.docId);
+            doc.isOffline = false;
+            if (doc.source !== 'dropbox') {
+              state.documents.delete(doc.docId);
+              state.memoryBlobs.delete(doc.docId);
+              state.pdfProxyCache.delete(doc.docId);
+            }
+            renderOfflineLibrarySidebar();
+            renderDropboxBrowserList();
+            if (state.activeDocId === doc.docId) updateViewerHeaderControls();
+            showToast(`Removed "${doc.name}" from offline storage.`, 'info');
+          });
+
+          listEl.appendChild(card);
+        });
+
+        if (window.lucide) lucide.createIcons({ nodes: [listEl] });
+      }
+
+      function renderLinksDirectorySidebar() {
+        const listEl = document.getElementById('sheetLinksDirectoryList');
+        listEl.innerHTML = '';
+
+        document.getElementById('linksTabCount').textContent = state.links.length;
+
+        if (state.links.length === 0) {
+          listEl.innerHTML = `
+            <div class="p-6 text-center text-xs text-slate-400">
+              No cross-sheet callout links yet. Activate "Link Tool (Draw Callout)" in the top toolbar and drag a box over any detail bubble.
+            </div>`;
+          return;
+        }
+
+        state.links.forEach((lnk) => {
+          const srcDoc = state.documents.get(lnk.sourceDocId);
+          const tgtDoc = state.documents.get(lnk.targetDocId);
+          const isOnCurrentPage =
+            lnk.sourceDocId === state.activeDocId && Number(lnk.sourcePage) === Number(state.activePage);
+
+          const card = document.createElement('div');
+          card.className = `p-2.5 rounded-xl border transition cursor-pointer ${
+            isOnCurrentPage
+              ? 'bg-slate-800 border-sky-500/60'
+              : 'bg-slate-800/50 hover:bg-slate-800 border-slate-700/70'
+          }`;
+
+          card.innerHTML = `
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-xs font-bold text-amber-300 truncate">${escapeHtml(lnk.label)}</span>
+              <button data-edit-dir-link="1" title="Edit Callout" class="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-white shrink-0">
+                <i data-lucide="pencil" class="w-3 h-3"></i>
+              </button>
+            </div>
+            <div class="text-[10px] font-mono text-slate-400 mt-1 truncate">
+              From: ${escapeHtml(srcDoc?.name || 'Sheet')} (P${lnk.sourcePage})
+            </div>
+            <div class="text-[10px] font-mono text-sky-300 truncate">
+              To: ${escapeHtml(tgtDoc?.name || 'Sheet')} (P${lnk.targetPage})
+            </div>
+          `;
+
+          card.addEventListener('click', async (e) => {
+            if (e.target.closest('[data-edit-dir-link]')) {
+              openEditCalloutModal(lnk);
+              return;
+            }
+            await followCalloutLink(lnk);
+            if (window.innerWidth < 768) toggleSidebarDrawer(false);
+          });
+
+          listEl.appendChild(card);
+        });
+
+        if (window.lucide) lucide.createIcons({ nodes: [listEl] });
+      }
+
+      // ---------------------------------------------------------------------
+      // LOCAL PDF IMPORT & CURRENT DOCUMENT OFFLINE SAVE
+      // ---------------------------------------------------------------------
+      async function handleLocalPdfImport(fileList) {
+        const files = Array.from(fileList || []).filter(
+          (f) => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')
+        );
+        if (files.length === 0) return;
+
+        let lastOpenedDocId = null;
+        for (const file of files) {
+          const buffer = await file.arrayBuffer();
+          const docId = `local_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+          state.memoryBlobs.set(docId, buffer);
+
+          const meta = {
+            docId,
+            name: file.name,
+            source: 'local',
+            dropboxPath: '',
+            size: buffer.byteLength,
+            modifiedAt: new Date(file.lastModified || Date.now()).toISOString(),
+            numPages: 1,
+            pageLabels: null,
+            isOffline: true
+          };
+          state.documents.set(docId, meta);
+          await getOrLoadPdfProxy(docId);
+          await ProDrawDB.saveDocument(meta, buffer);
+          lastOpenedDocId = docId;
+        }
+
+        renderOfflineLibrarySidebar();
+        if (lastOpenedDocId) {
+          await openBlueprintDocument(lastOpenedDocId, 1);
+          showToast(`Loaded & saved "${files[files.length - 1].name}" offline.`, 'success');
+        }
+      }
+
+      async function toggleSaveCurrentDocumentOffline() {
+        const meta = state.documents.get(state.activeDocId);
+        if (!meta) return;
+
+        if (meta.isOffline) {
+          showToast(`"${meta.name}" is already saved in your Offline Library.`, 'info');
+          return;
+        }
+
+        const buf = await getDocumentArrayBuffer(meta.docId);
+        meta.isOffline = true;
+        meta.size = buf.byteLength;
+        await ProDrawDB.saveDocument(meta, buf);
+        updateViewerHeaderControls();
+        renderOfflineLibrarySidebar();
+        renderDropboxBrowserList();
+        showToast(`Saved "${meta.name}" to IndexedDB for offline jobsite viewing.`, 'success');
+      }
+
+      // ---------------------------------------------------------------------
+      // TOOL & SIDEBAR UI HELPERS
+      // ---------------------------------------------------------------------
+      function setLinkToolActive(active) {
+        state.linkToolActive = active;
+        const btn = document.getElementById('toggleLinkToolBtn');
+        const banner = document.getElementById('drawToolBanner');
+        const vp = document.getElementById('blueprintViewport');
+
+        if (active) {
+          btn.className =
+            'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-500 text-slate-950 border border-amber-400 shadow-xs transition';
+          banner.classList.remove('hidden');
+          vp.style.cursor = 'crosshair';
+        } else {
+          btn.className =
+            'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-700 hover:bg-slate-600 text-slate-100 border border-slate-600 transition';
+          banner.classList.add('hidden');
+          vp.style.cursor = 'grab';
+        }
+        renderCalloutOverlays();
+      }
+
+      function switchSidebarTab(tabName) {
+        state.activeSidebarTab = tabName;
+        document.querySelectorAll('.sidebar-tab-btn').forEach((btn) => {
+          const isSelected = btn.dataset.tab === tabName;
+          btn.className = isSelected
+            ? 'sidebar-tab-btn py-1.5 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 bg-sky-600 text-white transition'
+            : 'sidebar-tab-btn py-1.5 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 text-slate-400 hover:text-white hover:bg-slate-800 transition';
+        });
+
+        document.getElementById('tabPanelDropbox').classList.toggle('hidden', tabName !== 'dropbox');
+        document.getElementById('tabPanelOffline').classList.toggle('hidden', tabName !== 'offline');
+        document.getElementById('tabPanelLinks').classList.toggle('hidden', tabName !== 'links');
+      }
+
+      function toggleSidebarDrawer(forceOpen = null) {
+        const sidebar = document.getElementById('appSidebar');
+        const backdrop = document.getElementById('sidebarBackdrop');
+        const isClosed =
+          sidebar.classList.contains('-translate-x-full') || sidebar.classList.contains('md:hidden');
+        const open = forceOpen !== null ? forceOpen : isClosed;
+
+        if (window.innerWidth < 768) {
+          sidebar.classList.toggle('-translate-x-full', !open);
+          backdrop.classList.toggle('hidden', !open);
+        } else {
+          sidebar.classList.toggle('md:hidden', !open);
+        }
+      }
+
+      // ---------------------------------------------------------------------
+      // VIEWPORT PAN, PINCH-ZOOM & CALLOUT BOX DRAWING GESTURES
+      // ---------------------------------------------------------------------
+      function clientToNormalizedPct(clientX, clientY) {
+        const vp = document.getElementById('blueprintViewport');
+        const rect = vp.getBoundingClientRect();
+        const sheetX = (clientX - rect.left - state.panX) / state.zoom;
+        const sheetY = (clientY - rect.top - state.panY) / state.zoom;
+        return {
+          xPct: Math.max(0, Math.min(100, (sheetX / state.baseWidth) * 100)),
+          yPct: Math.max(0, Math.min(100, (sheetY / state.baseHeight) * 100))
+        };
+      }
+
+      function bindViewportInteractions() {
+        const vp = document.getElementById('blueprintViewport');
+        const drawBox = document.getElementById('rubberBandDrawBox');
+
+        // Cursor-centered mouse wheel zoom
+        vp.addEventListener(
+          'wheel',
+          (e) => {
+            e.preventDefault();
+            const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+            zoomAtClientPoint(state.zoom * factor, e.clientX, e.clientY);
+          },
+          { passive: false }
+        );
+
+        vp.addEventListener('mousedown', (e) => {
+          if (e.button !== 0 || e.target.closest('button')) return;
+
+          if (state.linkToolActive) {
+            state.isDrawingBox = true;
+            const pt = clientToNormalizedPct(e.clientX, e.clientY);
+            state.drawStartPctX = pt.xPct;
+            state.drawStartPctY = pt.yPct;
+
+            drawBox.style.left = `${pt.xPct}%`;
+            drawBox.style.top = `${pt.yPct}%`;
+            drawBox.style.width = '0%';
+            drawBox.style.height = '0%';
+            drawBox.classList.remove('hidden');
+            return;
+          }
+
+          state.isPanning = true;
+          state.panStartX = e.clientX;
+          state.panStartY = e.clientY;
+          state.panOriginX = state.panX;
+          state.panOriginY = state.panY;
+          vp.style.cursor = 'grabbing';
+        });
+
+        window.addEventListener('mousemove', (e) => {
+          const pt = clientToNormalizedPct(e.clientX, e.clientY);
+          document.getElementById('telemetryCoords').textContent = `X: ${Math.round(pt.xPct)}% Y: ${Math.round(pt.yPct)}%`;
+
+          if (state.isDrawingBox) {
+            const x = Math.min(state.drawStartPctX, pt.xPct);
+            const y = Math.min(state.drawStartPctY, pt.yPct);
+            const w = Math.abs(pt.xPct - state.drawStartPctX);
+            const h = Math.abs(pt.yPct - state.drawStartPctY);
+            drawBox.style.left = `${x}%`;
+            drawBox.style.top = `${y}%`;
+            drawBox.style.width = `${w}%`;
+            drawBox.style.height = `${h}%`;
+            return;
+          }
+
+          if (!state.isPanning) return;
+          state.panX = state.panOriginX + (e.clientX - state.panStartX);
+          state.panY = state.panOriginY + (e.clientY - state.panStartY);
+          applyViewportTransform();
+        });
+
+        window.addEventListener('mouseup', (e) => {
+          if (state.isDrawingBox) {
+            state.isDrawingBox = false;
+            drawBox.classList.add('hidden');
+            const pt = clientToNormalizedPct(e.clientX, e.clientY);
+            let x = Math.min(state.drawStartPctX, pt.xPct);
+            let y = Math.min(state.drawStartPctY, pt.yPct);
+            let w = Math.abs(pt.xPct - state.drawStartPctX);
+            let h = Math.abs(pt.yPct - state.drawStartPctY);
+
+            if (w < 1.2 && h < 1.2) {
+              w = 4.2;
+              h = 6.0;
+              x = Math.max(0, Math.min(100 - w, pt.xPct - w / 2));
+              y = Math.max(0, Math.min(100 - h, pt.yPct - h / 2));
+            }
+            openCreateCalloutModal({ xPct: x, yPct: y, wPct: w, hPct: h });
+            return;
+          }
+
+          if (state.isPanning) {
+            state.isPanning = false;
+            vp.style.cursor = state.linkToolActive ? 'crosshair' : 'grab';
+          }
+        });
+
+        // Touch Pan & Two-Finger Pinch-to-Zoom for Field Tablets
+        vp.addEventListener(
+          'touchstart',
+          (e) => {
+            if (e.target.closest('button')) return;
+            if (e.touches.length === 1) {
+              const t = e.touches[0];
+              if (state.linkToolActive) {
+                state.touchGesture = 'draw';
+                state.isDrawingBox = true;
+                const pt = clientToNormalizedPct(t.clientX, t.clientY);
+                state.drawStartPctX = pt.xPct;
+                state.drawStartPctY = pt.yPct;
+                drawBox.style.left = `${pt.xPct}%`;
+                drawBox.style.top = `${pt.yPct}%`;
+                drawBox.style.width = '0%';
+                drawBox.style.height = '0%';
+                drawBox.classList.remove('hidden');
+              } else {
+                state.touchGesture = 'pan';
+                state.panStartX = t.clientX;
+                state.panStartY = t.clientY;
+                state.panOriginX = state.panX;
+                state.panOriginY = state.panY;
+              }
+            } else if (e.touches.length === 2) {
+              state.touchGesture = 'pinch';
+              state.isDrawingBox = false;
+              drawBox.classList.add('hidden');
+              const [t1, t2] = e.touches;
+              state.pinchStartDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+              state.pinchStartZoom = state.zoom;
+            }
+          },
+          { passive: false }
+        );
+
+        vp.addEventListener(
+          'touchmove',
+          (e) => {
+            e.preventDefault();
+            if (state.touchGesture === 'pan' && e.touches.length === 1) {
+              const t = e.touches[0];
+              state.panX = state.panOriginX + (t.clientX - state.panStartX);
+              state.panY = state.panOriginY + (t.clientY - state.panStartY);
+              applyViewportTransform();
+            } else if (state.touchGesture === 'draw' && e.touches.length === 1) {
+              const t = e.touches[0];
+              const pt = clientToNormalizedPct(t.clientX, t.clientY);
+              drawBox.style.left = `${Math.min(state.drawStartPctX, pt.xPct)}%`;
+              drawBox.style.top = `${Math.min(state.drawStartPctY, pt.yPct)}%`;
+              drawBox.style.width = `${Math.abs(pt.xPct - state.drawStartPctX)}%`;
+              drawBox.style.height = `${Math.abs(pt.yPct - state.drawStartPctY)}%`;
+            } else if (state.touchGesture === 'pinch' && e.touches.length === 2) {
+              const [t1, t2] = e.touches;
+              const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+              const cx = (t1.clientX + t2.clientX) / 2;
+              const cy = (t1.clientY + t2.clientY) / 2;
+              if (state.pinchStartDist > 0) {
+                zoomAtClientPoint(state.pinchStartZoom * (dist / state.pinchStartDist), cx, cy);
+              }
+            }
+          },
+          { passive: false }
+        );
+
+        vp.addEventListener('touchend', (e) => {
+          if (state.touchGesture === 'draw' && state.isDrawingBox) {
+            state.isDrawingBox = false;
+            drawBox.classList.add('hidden');
+            const t = e.changedTouches[0];
+            if (t) {
+              const pt = clientToNormalizedPct(t.clientX, t.clientY);
+              let x = Math.min(state.drawStartPctX, pt.xPct);
+              let y = Math.min(state.drawStartPctY, pt.yPct);
+              let w = Math.abs(pt.xPct - state.drawStartPctX);
+              let h = Math.abs(pt.yPct - state.drawStartPctY);
+              if (w < 1.5 && h < 1.5) {
+                w = 5.0;
+                h = 7.0;
+                x = Math.max(0, Math.min(100 - w, pt.xPct - w / 2));
+                y = Math.max(0, Math.min(100 - h, pt.yPct - h / 2));
+              }
+              openCreateCalloutModal({ xPct: x, yPct: y, wPct: w, hPct: h });
+            }
+          }
+          if (e.touches.length === 0) state.touchGesture = null;
+        });
+      }
+
+      // ---------------------------------------------------------------------
+      // ONLINE / OFFLINE NETWORK MONITORING
+      // ---------------------------------------------------------------------
+      function updateNetworkPillUI() {
+        const pill = document.getElementById('networkStatusPill');
+        const dot = document.getElementById('networkStatusDot');
+        const label = document.getElementById('networkStatusLabel');
+
+        if (navigator.onLine) {
+          pill.className =
+            'flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-950/90 text-emerald-300 border border-emerald-700/60';
+          dot.className = 'w-2 h-2 rounded-full bg-emerald-400 animate-pulse';
+          label.textContent = 'Online';
+        } else {
+          pill.className =
+            'flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-950/90 text-amber-300 border border-amber-600/70';
+          dot.className = 'w-2 h-2 rounded-full bg-amber-400';
+          label.textContent = 'Offline Mode';
+        }
+      }
+
+      // ---------------------------------------------------------------------
+      // WIRE UP ALL EVENT LISTENERS & BOOTSTRAP APP
+      // ---------------------------------------------------------------------
+      function bindAllEvents() {
+        window.addEventListener('online', () => {
+          updateNetworkPillUI();
+          showToast('Back Online.', 'success');
+        });
+        window.addEventListener('offline', () => {
+          updateNetworkPillUI();
+          showToast('Offline Mode — serving cached blueprints from IndexedDB.', 'warning', 4200);
+        });
+
+        // Listen for Mode B popup postMessage callback
+        window.addEventListener('message', async (event) => {
+          if (event.origin !== window.location.origin) return;
+          const msg = event.data;
+          if (!msg || msg.type !== 'PRODRAW_DROPBOX_OAUTH_CALLBACK') return;
+
+          if (msg.error || msg.errorDescription) {
+            DropboxOAuth.showAuthError(msg.errorDescription || msg.error);
+            return;
+          }
+
+          const expectedState = SafeStore.get('prodraw_dbx_oauth_state');
+          if (expectedState && msg.state && expectedState !== msg.state) {
+            DropboxOAuth.showAuthError('Popup OAuth state mismatch. Please retry.');
+            return;
+          }
+
+          const ok = await DropboxOAuth.exchangeCodeForTokens(msg.code, true);
+          if (ok) {
+            document.getElementById('dropboxAuthModal').classList.add('hidden');
+            switchSidebarTab('dropbox');
+            await loadDropboxFolder('');
+          }
+        });
+
+        // Sidebar toggles & tabs
+        document.getElementById('toggleSidebarBtn').addEventListener('click', () => toggleSidebarDrawer());
+        document.getElementById('sidebarBackdrop').addEventListener('click', () => toggleSidebarDrawer(false));
+        document.querySelectorAll('.sidebar-tab-btn').forEach((btn) => {
+          btn.addEventListener('click', () => switchSidebarTab(btn.dataset.tab));
+        });
+        document.getElementById('headerOfflineBadgeBtn').addEventListener('click', () => {
+          toggleSidebarDrawer(true);
+          switchSidebarTab('offline');
+        });
+
+        // Load Sample Construction Set
+        document.getElementById('loadSampleSetBtn').addEventListener('click', async () => {
+          const sampleDoc = await createSampleCommercialBlueprintSet();
+          renderOfflineLibrarySidebar();
+          renderLinksDirectorySidebar();
+          await openBlueprintDocument(sampleDoc.docId, 1);
+          showToast('Loaded 4-sheet Commercial Sample Blueprint Set with pre-linked callouts.', 'success');
+        });
+
+        // Dropbox Header & Modal Controls
+        document.getElementById('openDropboxAuthBtn').addEventListener('click', openDropboxAuthModal);
+        document.getElementById('closeDbxAuthModalBtn').addEventListener('click', () =>
+          document.getElementById('dropboxAuthModal').classList.add('hidden')
+        );
+        document.getElementById('doneDbxAuthModalBtn').addEventListener('click', () =>
+          document.getElementById('dropboxAuthModal').classList.add('hidden')
+        );
+
+        document.getElementById('selectModeABtn').addEventListener('click', () => switchDropboxAuthMode('modeA'));
+        document.getElementById('selectModeBBtn').addEventListener('click', () => switchDropboxAuthMode('modeB'));
+
+        document.getElementById('launchModeAAuthBtn').addEventListener('click', () => {
+          DropboxOAuth.launchModeADirectCode(document.getElementById('dbxClientIdInput').value);
+        });
+
+        document.getElementById('completeModeAConnectionBtn').addEventListener('click', async () => {
+          const btn = document.getElementById('completeModeAConnectionBtn');
+          btn.disabled = true;
+          btn.textContent = 'Connecting...';
+          try {
+            const code = document.getElementById('dbxManualCodeInput').value;
+            const ok = await DropboxOAuth.exchangeCodeForTokens(code, false);
+            if (ok) {
+              document.getElementById('dropboxAuthModal').classList.add('hidden');
+              switchSidebarTab('dropbox');
+              await loadDropboxFolder('');
+            }
+          } finally {
+            btn.disabled = false;
+            btn.textContent = 'Complete Connection';
+          }
+        });
+
+        document.getElementById('dbxManualCodeInput').addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            document.getElementById('completeModeAConnectionBtn').click();
+          }
+        });
+
+        document.getElementById('launchModeBPopupBtn').addEventListener('click', () => {
+          DropboxOAuth.launchModeBPopup(document.getElementById('dbxClientIdInput').value);
+        });
+
+        document.getElementById('copyRedirectUriBtn').addEventListener('click', () => {
+          const input = document.getElementById('dbxRedirectUriDisplay');
+          input.select();
+          document.execCommand('copy');
+          showToast('Redirect URI copied to clipboard.', 'success');
+        });
+
+        // Test Connection & Disconnect Buttons
+        const handleTestConn = async () => {
+          try {
+            await DropboxOAuth.verifyAndFetchAccountInfo(true);
+          } catch {
+            // Error toast already displayed
+          }
+        };
+        document.getElementById('dbxTestConnBtn').addEventListener('click', handleTestConn);
+        document.getElementById('dbxModalTestBtn').addEventListener('click', handleTestConn);
+        document.getElementById('dbxHeaderDisconnectBtn').addEventListener('click', () => DropboxOAuth.disconnect());
+        document.getElementById('dbxModalDisconnectBtn').addEventListener('click', () => DropboxOAuth.disconnect());
+
+        // Dropbox Browser Controls
+        document.getElementById('dbxRefreshBtn').addEventListener('click', () => loadDropboxFolder(state.dbxCurrentPath));
+        document.getElementById('dbxSearchInput').addEventListener('input', (e) => {
+          state.dbxSearchQuery = e.target.value;
+          renderDropboxBrowserList();
+        });
+        document.getElementById('dbxPdfOnlyToggle').addEventListener('click', () => {
+          state.dbxPdfOnly = !state.dbxPdfOnly;
+          const btn = document.getElementById('dbxPdfOnlyToggle');
+          btn.className = state.dbxPdfOnly
+            ? 'px-2 py-1.5 rounded-lg text-[11px] font-mono font-semibold bg-sky-500/20 text-sky-300 border border-sky-500/40 shrink-0'
+            : 'px-2 py-1.5 rounded-lg text-[11px] font-mono font-semibold bg-slate-800 text-slate-400 border border-slate-700 shrink-0';
+          renderDropboxBrowserList();
+        });
+        document.getElementById('dbxSaveAllFolderOfflineBtn').addEventListener('click', cacheAllFolderPdfsOffline);
+
+        // Local PDF Import & Offline Save
+        document.getElementById('importLocalPdfBtn').addEventListener('click', () =>
+          document.getElementById('localPdfFileInput').click()
+        );
+        document.getElementById('offlinePanelImportBtn').addEventListener('click', () =>
+          document.getElementById('localPdfFileInput').click()
+        );
+        document.getElementById('localPdfFileInput').addEventListener('change', (e) => {
+          handleLocalPdfImport(e.target.files);
+          e.target.value = '';
+        });
+        document.getElementById('saveCurrentOfflineBtn').addEventListener('click', toggleSaveCurrentDocumentOffline);
+
+        // Page Switcher Controls
+        document.getElementById('pageSelectDropdown').addEventListener('change', (e) => {
+          openBlueprintDocument(state.activeDocId, Number(e.target.value));
+        });
+        document.getElementById('prevPageBtn').addEventListener('click', () => {
+          if (state.activePage > 1) openBlueprintDocument(state.activeDocId, state.activePage - 1);
+        });
+        document.getElementById('nextPageBtn').addEventListener('click', () => {
+          const meta = state.documents.get(state.activeDocId);
+          if (meta && state.activePage < meta.numPages) openBlueprintDocument(state.activeDocId, state.activePage + 1);
+        });
+
+        // Callout Link Tool & JSON Export/Import
+        document.getElementById('toggleLinkToolBtn').addEventListener('click', () =>
+          setLinkToolActive(!state.linkToolActive)
+        );
+        document.getElementById('exitDrawToolBannerBtn').addEventListener('click', () => setLinkToolActive(false));
+        document.getElementById('toggleShowLinksBtn').addEventListener('click', () => {
+          state.showLinks = !state.showLinks;
+          const icon = document.getElementById('showLinksEyeIcon');
+          icon.setAttribute('data-lucide', state.showLinks ? 'eye' : 'eye-off');
+          if (window.lucide) lucide.createIcons({ nodes: [document.getElementById('toggleShowLinksBtn')] });
+          renderCalloutOverlays();
+        });
+
+        document.getElementById('exportLinksBtn').addEventListener('click', exportLinksToJsonFile);
+        document.getElementById('sidebarExportLinksBtn').addEventListener('click', exportLinksToJsonFile);
+        document.getElementById('importLinksBtn').addEventListener('click', () =>
+          document.getElementById('importLinksFileInput').click()
+        );
+        document.getElementById('sidebarImportLinksBtn').addEventListener('click', () =>
+          document.getElementById('importLinksFileInput').click()
+        );
+        document.getElementById('importLinksFileInput').addEventListener('change', (e) => {
+          importLinksFromJsonFile(e.target.files[0]);
+          e.target.value = '';
+        });
+
+        // Callout Link Modal Events
+        document.getElementById('closeCalloutModalBtn').addEventListener('click', closeCalloutModal);
+        document.getElementById('cancelCalloutModalBtn').addEventListener('click', closeCalloutModal);
+        document.getElementById('saveCalloutModalBtn').addEventListener('click', saveCalloutFromModal);
+        document.getElementById('deleteCalloutLinkBtn').addEventListener('click', deleteActiveCalloutFromModal);
+        document.getElementById('hotspotShapeCircleBtn').addEventListener('click', () => updateModalHotspotShapeUI('circle'));
+        document.getElementById('hotspotShapeRectBtn').addEventListener('click', () => updateModalHotspotShapeUI('rect'));
+        document.getElementById('calloutTargetDocSelect').addEventListener('change', (e) => {
+          updateTargetPageDropdownAndPreview(e.target.value, 1);
+        });
+        document.getElementById('calloutTargetPageSelect').addEventListener('change', (e) => {
+          const docId = document.getElementById('calloutTargetDocSelect').value;
+          renderLiveTargetSheetPreview(docId, Number(e.target.value));
+        });
+
+        // Navigation History Back Button
+        document.getElementById('navHistoryBackBtn').addEventListener('click', handleBackHistoryClick);
+
+        // Zoom Toolbar Buttons
+        document.getElementById('zoomInBtn').addEventListener('click', () => zoomByStep(1.25));
+        document.getElementById('zoomOutBtn').addEventListener('click', () => zoomByStep(1 / 1.25));
+        document.getElementById('fitWidthBtn').addEventListener('click', () => fitViewport('width'));
+        document.getElementById('fitPageBtn').addEventListener('click', () => fitViewport('page'));
+        document.getElementById('resetZoom100Btn').addEventListener('click', () => fitViewport('100'));
+
+        // Keyboard Shortcuts
+        window.addEventListener('keydown', (e) => {
+          if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return;
+          if (e.key === '=' || e.key === '+') {
+            e.preventDefault();
+            zoomByStep(1.25);
+          } else if (e.key === '-' || e.key === '_') {
+            e.preventDefault();
+            zoomByStep(1 / 1.25);
+          } else if (e.key === '0') {
+            e.preventDefault();
+            fitViewport('page');
+          } else if (e.key.toLowerCase() === 'w') {
+            e.preventDefault();
+            fitViewport('width');
+          } else if (e.key === '1') {
+            e.preventDefault();
+            fitViewport('100');
+          } else if (e.key === 'Escape') {
+            closeCalloutModal();
+            setLinkToolActive(false);
+          }
+        });
+
+        window.addEventListener('resize', () => scheduleHighDpiRerender());
+      }
+
+      window.addEventListener('load', async () => {
+        if (window.lucide) lucide.createIcons();
+
+        updateNetworkPillUI();
+        updateDropboxUIStatus();
+        bindAllEvents();
+        bindViewportInteractions();
+
+        if (window.innerWidth < 768) {
+          document.getElementById('appSidebar').classList.add('-translate-x-full');
+        }
+
+        try {
+          await ProDrawDB.init();
+
+          // Handle any incoming Mode B OAuth redirect query params (?code= / ?error=)
+          await DropboxOAuth.handleUrlCallbackOnLoad();
+
+          // Load all offline documents and persisted callout links from IndexedDB
+          const savedDocs = await ProDrawDB.getAllDocuments();
+          savedDocs.forEach((doc) => state.documents.set(doc.docId, doc));
+
+          state.links = await ProDrawDB.getAllLinks();
+
+          // Auto-generate Sample Construction Set on first launch if no documents exist yet
+          if (state.documents.size === 0) {
+            await createSampleCommercialBlueprintSet();
+          }
+
+          renderOfflineLibrarySidebar();
+          renderLinksDirectorySidebar();
+          renderDropboxBrowserList();
+
+          // If Dropbox is already connected, load root folder in background; otherwise default sidebar to Offline Library
+          if (DropboxOAuth.isConnected()) {
+            switchSidebarTab('dropbox');
+            loadDropboxFolder('').catch(() => {});
+          } else {
+            switchSidebarTab('offline');
+          }
+
+          // Open the first available document
+          const firstDoc =
+            state.documents.get('sample_commercial_set') || Array.from(state.documents.values())[0];
+          if (firstDoc) {
+            await openBlueprintDocument(firstDoc.docId, 1);
+          }
+        } catch (err) {
+          console.error('ProDraw startup error:', err);
+          showToast(`Startup error: ${err.message}`, 'error', 5000);
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
