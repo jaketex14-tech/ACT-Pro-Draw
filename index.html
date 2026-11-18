@@ -238,26 +238,7 @@
           class="px-2 py-1 rounded hover:bg-slate-700 active:bg-slate-600 text-[11px] font-semibold text-slate-200 transition">
           Fit
         </button>
-        <button id="zoom100Btn" type="button" title="Zoom to 100% (1)"
-          class="hidden sm:inline-block px-1.5 py-1 rounded hover:bg-slate-700 active:bg-slate-600 text-[10px] font-mono font-semibold text-slate-300 transition">
-          100%
-        </button>
-        <button id="zoom200Btn" type="button" title="Zoom to 200% (2)"
-          class="hidden md:inline-block px-1.5 py-1 rounded hover:bg-slate-700 active:bg-slate-600 text-[10px] font-mono font-semibold text-slate-300 transition">
-          200%
-        </button>
-        <button id="zoom400Btn" type="button" title="Zoom to 400% Detail Inspection (4)"
-          class="hidden md:inline-block px-1.5 py-1 rounded hover:bg-slate-700 active:bg-slate-600 text-[10px] font-mono font-semibold text-amber-300 transition">
-          400%
-        </button>
       </div>
-
-      <!-- HD Vector Quality Multiplier Selector (HD 1.25x / Ultra HD 1.75x / Max Crisp 2.25x) -->
-      <button id="hdQualityToggleBtn" type="button" title="Cycle PDF Vector Supersampling Quality (HD / Ultra HD / Max Crisp)"
-        class="flex items-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-mono font-bold bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-600/50 transition shrink-0">
-        <span id="hdQualityDot" class="w-2 h-2 rounded-full bg-emerald-400"></span>
-        <span id="hdQualityLabel">Ultra HD</span>
-      </button>
 
       <!-- Add Link Mode Toggle Button -->
       <button id="toggleAddLinkBtn" type="button" title="Draw Callout Link to Another PDF or Sheet (L)"
@@ -338,17 +319,6 @@
       <canvas id="pdfDetailCanvas" class="absolute top-0 left-0 block pointer-events-none hidden"></canvas>
       <div id="calloutOverlayLayer" class="absolute inset-0 overflow-hidden pointer-events-none"></div>
       <div id="calloutRubberband" class="callout-rubberband hidden"></div>
-    </div>
-
-    <!-- Bottom-Right Sheet, Vector HD Status & Project Folder Telemetry Pill -->
-    <div class="hidden sm:flex items-center gap-2 absolute bottom-3 right-3 z-10 px-3 py-1.5 rounded-xl bg-slate-900/90 text-slate-200 text-[11px] font-mono border border-slate-700 pointer-events-none">
-      <span id="vectorStatusBadge" class="text-emerald-400 font-bold">Vector HD Ready</span>
-      <span class="text-slate-500">|</span>
-      <span id="footerSetTitle">Commercial Sample Set</span>
-      <span class="text-slate-500">|</span>
-      <span id="footerSheetCounter">Sheet 1 / 4</span>
-      <span class="text-slate-500">|</span>
-      <span id="footerProjectPoolCount" class="text-sky-300">4 Targets Ready</span>
     </div>
   </main>
 
@@ -1282,7 +1252,7 @@
         baseRenderTask: null,
         detailRenderTask: null,
         detailDebounceTimer: null,
-        qualityMultiplier: Number(SafeStorage.get('prodraw_hd_quality_mult', '1.75')) || 1.75,
+        qualityMultiplier: 1.25,
 
         sheetWidth: 1440,
         sheetHeight: 960,
@@ -2041,30 +2011,8 @@
         stage.style.willChange = active ? 'transform' : 'auto';
       }
 
-      function updateVectorStatusUI(statusText, isBusy = false) {
-        const badge = document.getElementById('vectorStatusBadge');
-        const dot = document.getElementById('hdQualityDot');
-        if (badge) {
-          badge.textContent = statusText;
-          badge.className = isBusy ? 'text-amber-300 font-bold animate-pulse' : 'text-emerald-400 font-bold';
-        }
-        if (dot) {
-          dot.className = isBusy
-            ? 'w-2 h-2 rounded-full bg-amber-400 animate-ping'
-            : 'w-2 h-2 rounded-full bg-emerald-400';
-        }
-      }
-
-      function updateHdQualityButtonUI() {
-        const label = document.getElementById('hdQualityLabel');
-        if (!label) return;
-        if (state.qualityMultiplier >= 2.2) {
-          label.textContent = 'Max Crisp 2.25x';
-        } else if (state.qualityMultiplier >= 1.7) {
-          label.textContent = 'Ultra HD 1.75x';
-        } else {
-          label.textContent = 'HD 1.25x';
-        }
+      function updateVectorStatusUI() {
+        // Status pill removed for a cleaner workspace
       }
 
       function clearDetailOverlayCanvas() {
@@ -3678,11 +3626,6 @@
             : state.activeSet.name;
 
         document.getElementById('activeSheetPillText').textContent = pillTitle;
-        document.getElementById('footerSetTitle').textContent = state.activeSet.name;
-        document.getElementById('footerSheetCounter').textContent = `Page ${state.activeSheetIndex + 1} / ${state.activeSet.sheets.length}`;
-
-        const allTargetsCount = getAllSelectableTargets().length;
-        document.getElementById('footerProjectPoolCount').textContent = `${allTargetsCount} Target Sheet(s) Ready`;
 
         const stepper = document.getElementById('multiPageStepperWrap');
         if (state.activeSet.sheets.length > 1) {
@@ -4894,37 +4837,6 @@
           computeFitZoomAndPan();
           applyStageTransform();
           scheduleDetailRender();
-        });
-
-        document.getElementById('zoom100Btn')?.addEventListener('click', () => {
-          const vp = document.getElementById('canvasViewport').getBoundingClientRect();
-          zoomAtClientPoint(1.0, vp.left + vp.width / 2, vp.top + vp.height / 2);
-        });
-
-        document.getElementById('zoom200Btn')?.addEventListener('click', () => {
-          const vp = document.getElementById('canvasViewport').getBoundingClientRect();
-          zoomAtClientPoint(2.0, vp.left + vp.width / 2, vp.top + vp.height / 2);
-        });
-
-        document.getElementById('zoom400Btn')?.addEventListener('click', () => {
-          const vp = document.getElementById('canvasViewport').getBoundingClientRect();
-          zoomAtClientPoint(4.0, vp.left + vp.width / 2, vp.top + vp.height / 2);
-        });
-
-        // HD Vector Supersampling Quality Selector (1.25x -> 1.75x -> 2.25x)
-        updateHdQualityButtonUI();
-        document.getElementById('hdQualityToggleBtn')?.addEventListener('click', () => {
-          if (state.qualityMultiplier < 1.5) {
-            state.qualityMultiplier = 1.75;
-          } else if (state.qualityMultiplier < 2.0) {
-            state.qualityMultiplier = 2.25;
-          } else {
-            state.qualityMultiplier = 1.25;
-          }
-          SafeStorage.set('prodraw_hd_quality_mult', String(state.qualityMultiplier));
-          updateHdQualityButtonUI();
-          showToast(`Vector rendering quality set to ${document.getElementById('hdQualityLabel').textContent}`, 'info', 2000);
-          renderCurrentSheet({ fitToScreen: false }).catch(() => {});
         });
 
         // Add Callout Link Mode Toggle
