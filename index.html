@@ -1023,12 +1023,182 @@
         isAppFolderRestricted() { return SafeStorage.get('prodraw_dbx_app_restricted', '') === 'true'; },
         isConnected() { return Boolean(this.getAccessToken() || this.getRefreshToken()); },
 
+        getRedirectUri() {
+          return window.location.origin + window.location.pathname;
+        },
+
+        generateCodeVerifier() {
+          const arr = new Uint8Array(48);
+          crypto.getRandomValues(arr);
+          return btoa(String.fromCharCode(...arr)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        },
+
+        async generateCodeChallenge(verifier) {
+          const data = new TextEncoder().encode(verifier);
+          const digest = await crypto.subtle.digest('SHA-256', data);
+          return btoa(String.fromCharCode(...new Uint8Array(digest))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        },
+
+        showOAuthError(msg) {
+          const banner = document.getElementById('dbxOAuthErrorBanner');
+          if (!banner) return;
+          if (!msg) {
+            banner.classList.add('hidden');
+            banner.textContent = '';
+          } else {
+            banner.textContent = msg;
+            banner.classList.remove('hidden');
+          }
+        },
+
+        async startDirectCodeFlow() {
+          this.showOAuthError('');
+          const clientId = (document.getElementById('dbxClientIdInput')?.value || this.getClientId()).trim();
+          if (!clientId) {
+            this.showOAuthError('Please enter your Dropbox App Key (Client ID) first.');
+            return;
+          }
+          SafeStorage.set('prodraw_dbx_client_id', clientId);
+
+          const verifier = this.generateCodeVerifier();
+          const challenge = await this.generateCodeChallenge(verifier);
+          SafeStorage.set('prodraw_dbx_pkce_verifier', verifier);
+
+          const params = new URLSearchParams({
+            client_id: clientId,
+            response_type: 'code',
+            code_challenge: challenge,
+            code_challenge_method: 'S256',
+            token_access_type: 'offline'
+          });
+
+          const authUrl = `https://www.dropbox.com/oauth2/authorize?${params.toString()}`;
+          window.open(authUrl, '_blank', 'noopener,noreferrer');
+          showToast('Dropbox authorization opened in a new tab. Copy the code and paste it in Step 2.', 'info', 4500);
+        },
+
+        async startRedirectFlow() {
+          this.showOAuthError('');
+          const clientId = (document.getElementById('dbxClientIdInput')?.value || this.getClientId()).trim();
+          if (!clientId) {
+            this.showOAuthError('Please enter your Dropbox App Key (Client ID) first.');
+            return;
+          }
+          SafeStorage.set('prodraw_dbx_client_id', clientId);
+
+          const verifier = this.generateCodeVerifier();
+          const challenge = await this.generateCodeChallenge(verifier);
+          const oauthState = this.generateCodeVerifier().slice(0, 24);
+          SafeStorage.set('prodraw_dbx_pkce_verifier', verifier);
+          SafeStorage.set('prodraw_dbx_oauth_state', oauthState);
+          SafeStorage.set('prodraw_dbx_used_redirect', 'true');
+
+          const params = new URLSearchParams({
+            client_id: clientId,
+            response_type: 'code',
+            code_challenge: challenge,
+            code_challenge_method: 'S256',
+            redirect_uri: this.getRedirectUri(),
+            token_access_type: 'offline',
+            state: oauthState
+          });
+
+          window.location.href = `https://www.dropbox.com/oauth2/authorize?${params.toString()}`;
+        },
+
+        async exchangeCodeForTokens(code, useRedirectUri = false) {
+          this.showOAuthError('');
+          const cleanCode = String(code || '').trim();
+          if (!cleanCode) {
+            this.showOAuthError('Please paste the authorization code from Dropbox.');
+            return false;
+          }
+          const clientId = (document.getElementById('dbxClientIdInput')?.value || this.getClientId()).trim();
+          const verifier = SafeStorage.get('prodraw_dbx_pkce_verifier', '');
+          if (!clientId || !verifier) {
+            this.showOAuthError('Missing PKCE session or App Key. Please click "Step 1: Open Dropbox & Get Code" again.');
+            return false;
+          }
+
+          const bodyParams = new URLSearchParams({
+            code: cleanCode,
+            grant_type: 'authorization_code',
+            client_id: clientId,
+            code_verifier: verifier
+          });
+          if (useRedirectUri) {
+            bodyParams.set('redirect_uri', this.getRedirectUri());
+          }
+
+          try {
+            const res = await fetch('https://api.dropbox.com/oauth2/token', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: bodyParams
+            });
+            const raw = await res.text();
+            let data = {};
+            try { data = JSON.parse(raw); } catch {}
+            if (!res.ok || !data.access_token) {
+              throw new Error(data.error_description || data.error || `Token exchange failed (${res.status})`);
+            }
+
+            SafeStorage.set('prodraw_dbx_access', data.access_token);
+            if (data.refresh_token) SafeStorage.set('prodraw_dbx_refresh', data.refresh_token);
+            SafeStorage.remove('prodraw_dbx_pkce_verifier');
+            SafeStorage.remove('prodraw_dbx_used_redirect');
+
+            updateDropboxConnectionUI();
+            showToast('Connected to Dropbox!', 'success');
+            document.getElementById('dbxAuthSetupSection')?.classList.add('hidden');
+            const startFolder = clampToLockedRoot('');
+            await loadDropboxFolder(startFolder, null);
+            return true;
+          } catch (err) {
+            this.showOAuthError(err.message);
+            return false;
+          }
+        },
+
+        async handleOAuthCallbackOnBoot() {
+          const url = new URL(window.location.href);
+          const code = url.searchParams.get('code');
+          const errParam = url.searchParams.get('error_description') || url.searchParams.get('error');
+          if (!code && !errParam) return;
+
+          url.searchParams.delete('code');
+          url.searchParams.delete('state');
+          url.searchParams.delete('error');
+          url.searchParams.delete('error_description');
+          window.history.replaceState({}, document.title, url.toString());
+
+          document.getElementById('dropboxModal')?.classList.remove('hidden');
+          if (errParam) {
+            this.showOAuthError(errParam);
+            return;
+          }
+          if (code) {
+            await this.exchangeCodeForTokens(code, true);
+          }
+        },
+
+        disconnect() {
+          SafeStorage.remove('prodraw_dbx_access');
+          SafeStorage.remove('prodraw_dbx_refresh');
+          SafeStorage.remove('prodraw_dbx_pkce_verifier');
+          state.dbxEntries = [];
+          state.dbxPath = clampToLockedRoot('');
+          updateDropboxConnectionUI();
+          renderDropboxEntries();
+          showToast('Disconnected from Dropbox.', 'info');
+        },
+
         async ensureValidAccessToken() {
           let token = this.getAccessToken();
           if (token) return token;
           const refresh = this.getRefreshToken();
           const clientId = this.getClientId();
-          if (!refresh || !clientId) throw new Error('Not connected to Dropbox. Please connect in the Dropbox Browser.');
+          if (!refresh || !clientId) throw new Error('Not connected to Dropbox. Click "Connect Setup" above.');
 
           const res = await fetch('https://api.dropbox.com/oauth2/token', {
             method: 'POST',
@@ -1049,20 +1219,41 @@
           const root = getLockedRootPath();
           if (root) path = clampToLockedRoot(path);
           const token = await this.ensureValidAccessToken();
-          const res = await fetch('https://api.dropboxapi.com/2/files/list_folder', {
+
+          const doFetch = async (targetPath) => fetch('https://api.dropboxapi.com/2/files/list_folder', {
             method: 'POST',
             headers: {
               Authorization: `Bearer ${token}`,
               'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ path, include_mounted_folders: true })
+            body: JSON.stringify({ path: targetPath, include_mounted_folders: true })
           });
+
+          let res = await doFetch(path);
+          let raw = await res.text();
+          let data = {};
+          try { data = JSON.parse(raw); } catch { data = { error_summary: raw }; }
+
           if (!res.ok) {
-            const err = await res.text();
-            throw new Error(`Dropbox list_folder failed: ${err}`);
+            throw new Error(data.error_summary || `Dropbox list_folder failed (${res.status})`);
           }
-          const data = await res.json();
-          return data.entries || [];
+
+          const entries = [...(data.entries || [])];
+          while (data.has_more && data.cursor) {
+            const contRes = await fetch('https://api.dropboxapi.com/2/files/list_folder/continue', {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({ cursor: data.cursor })
+            });
+            const contData = await contRes.json();
+            if (!contRes.ok) break;
+            entries.push(...(contData.entries || []));
+            data = contData;
+          }
+          return entries;
         },
 
         async listSharedFolders() {
@@ -1099,25 +1290,266 @@
         }
       };
 
-      // ---------------------------------------------------------------------
-      // 7. PDF.JS INITIALIZATION & DOCUMENT BUFFER LOADER
-      // ---------------------------------------------------------------------
-      async function initPdfJs() {
-        if (state.pdfJsReadyPromise) return state.pdfJsReadyPromise;
-        state.pdfJsReadyPromise = (async () => {
-          if (window.pdfjsLib) {
-            window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-          }
-        })();
-        return state.pdfJsReadyPromise;
+      function updateDropboxConnectionUI() {
+        const connected = DropboxService.isConnected();
+        const dot1 = document.getElementById('dbxStatusDot');
+        const dot2 = document.getElementById('modalDbxStatusDot');
+        const sub = document.getElementById('modalDbxAccountSubtitle');
+        const discBtn = document.getElementById('disconnectDbxBtn');
+        const setupSec = document.getElementById('dbxAuthSetupSection');
+        const quickRow = document.getElementById('dbxQuickJumpRow');
+        const clientInput = document.getElementById('dbxClientIdInput');
+        const redirInput = document.getElementById('redirectUriReadonlyInput');
+
+        if (clientInput && !clientInput.value) clientInput.value = DropboxService.getClientId();
+        if (redirInput) redirInput.value = DropboxService.getRedirectUri();
+        if (getLockedRootPath()) quickRow?.classList.add('hidden');
+
+        if (connected) {
+          dot1?.classList.replace('bg-amber-300', 'bg-emerald-400');
+          dot2?.classList.replace('bg-amber-400', 'bg-emerald-400');
+          if (sub) sub.textContent = 'Connected (Read-Only)';
+          discBtn?.classList.remove('hidden');
+          setupSec?.classList.add('hidden');
+        } else {
+          dot1?.classList.replace('bg-emerald-400', 'bg-amber-300');
+          dot2?.classList.replace('bg-emerald-400', 'bg-amber-400');
+          if (sub) sub.textContent = 'Not Connected • Enter App Key below';
+          discBtn?.classList.add('hidden');
+          setupSec?.classList.remove('hidden');
+        }
       }
 
+      async function loadDropboxFolder(path = '', namespaceId = null) {
+        const targetPath = clampToLockedRoot(path);
+        state.dbxPath = targetPath;
+        state.dbxNamespaceId = namespaceId || null;
+
+        const container = document.getElementById('dbxEntriesContainer');
+        const crumbBar = document.getElementById('dbxBreadcrumbBar');
+
+        if (crumbBar) {
+          crumbBar.innerHTML = '';
+          const lockedRoot = getLockedRootPath();
+          const parts = targetPath.split('/').filter(Boolean);
+          let running = '';
+
+          if (!lockedRoot) {
+            const rootBtn = document.createElement('button');
+            rootBtn.type = 'button';
+            rootBtn.className = 'px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-900 shrink-0';
+            rootBtn.textContent = 'Dropbox';
+            rootBtn.addEventListener('click', () => loadDropboxFolder('', null));
+            crumbBar.appendChild(rootBtn);
+          }
+
+          parts.forEach((seg, idx) => {
+            running += '/' + seg;
+            const segPath = running;
+            if (lockedRoot && segPath.toLowerCase().length < lockedRoot.toLowerCase().length) return;
+            if (crumbBar.children.length > 0) {
+              const sep = document.createElement('span');
+              sep.className = 'text-slate-400';
+              sep.textContent = '/';
+              crumbBar.appendChild(sep);
+            }
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-900 shrink-0';
+            btn.textContent = seg;
+            btn.addEventListener('click', () => loadDropboxFolder(segPath, state.dbxNamespaceId));
+            crumbBar.appendChild(btn);
+          });
+        }
+
+        if (!DropboxService.isConnected()) {
+          if (container) {
+            container.innerHTML = `<div class="p-6 text-center text-xs text-slate-500">Connect your Dropbox account above to browse folders and PDFs.</div>`;
+          }
+          return;
+        }
+
+        if (container) {
+          container.innerHTML = `<div class="p-6 text-center text-xs text-slate-500">Loading folder...</div>`;
+        }
+
+        try {
+          const entries = await DropboxService.listFolder(targetPath, state.dbxNamespaceId);
+          state.dbxEntries = entries;
+          registerProjectSiblingFiles(entries, targetPath, state.dbxNamespaceId);
+          enforceLockedRootOnProjectFiles();
+          renderDropboxEntries();
+          renderSheetsDrawerList();
+          updateHeaderBar();
+        } catch (err) {
+          if (container) {
+            container.innerHTML = `<div class="p-4 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800">${escapeHtml(err.message)}</div>`;
+          }
+        }
+      }
+
+      function renderDropboxEntries() {
+        const container = document.getElementById('dbxEntriesContainer');
+        if (!container) return;
+        const filtered = state.dbxEntries
+          .filter((e) => e['.tag'] === 'folder' || (e['.tag'] === 'file' && e.name.toLowerCase().endsWith('.pdf')))
+          .sort((a, b) => (a['.tag'] !== b['.tag'] ? (a['.tag'] === 'folder' ? -1 : 1) : a.name.localeCompare(b.name)));
+
+        if (filtered.length === 0) {
+          container.innerHTML = `<div class="p-6 text-center text-xs text-slate-500">No subfolders or PDF blueprints found in this folder.</div>`;
+          return;
+        }
+
+        container.innerHTML = '';
+        filtered.forEach((entry) => {
+          const isFolder = entry['.tag'] === 'folder';
+          const row = document.createElement('div');
+          row.className = 'p-2.5 rounded-xl bg-white hover:bg-sky-50/60 border border-slate-200 flex items-center justify-between gap-2 cursor-pointer transition';
+
+          if (isFolder) {
+            row.innerHTML = `
+              <div class="flex items-center gap-2.5 min-w-0">
+                <span class="text-amber-500 font-bold text-sm">📁</span>
+                <span class="text-xs font-bold text-slate-900 truncate">${escapeHtml(entry.name)}</span>
+              </div>
+              <span class="text-xs text-slate-400">→</span>
+            `;
+            row.addEventListener('click', () => loadDropboxFolder(entry.path_lower, state.dbxNamespaceId));
+          } else {
+            const docId = `dbx_${entry.path_lower}`;
+            const isOff = state.offlineSets.has(docId);
+            row.innerHTML = `
+              <div class="flex items-center gap-2.5 min-w-0 flex-1">
+                <span class="text-sky-600 font-bold text-sm">📄</span>
+                <div class="min-w-0 flex-1">
+                  <div class="text-xs font-bold text-slate-900 truncate">${escapeHtml(entry.name)}</div>
+                  <div class="text-[10px] font-mono text-slate-500">${formatBytes(entry.size)} ${isOff ? '• Available Offline' : ''}</div>
+                </div>
+              </div>
+              <button type="button" data-off-btn="1"
+                class="px-2.5 py-1 rounded-lg text-[11px] font-bold border shrink-0 ${isOff ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300'}">
+                ${isOff ? '✓ Offline' : 'Make Offline'}
+              </button>
+            `;
+            row.addEventListener('click', async (e) => {
+              if (e.target.closest('[data-off-btn]')) return;
+              document.getElementById('dropboxModal')?.classList.add('hidden');
+              await openBlueprintDocument(docId, 1);
+            });
+            row.querySelector('[data-off-btn]')?.addEventListener('click', async (e) => {
+              e.stopPropagation();
+              const meta = state.projectFiles.get(docId);
+              if (!meta) return;
+              if (state.offlineSets.has(docId)) {
+                await ProDrawOfflineDB.removeDocument(docId);
+                meta.isOffline = false;
+                state.offlineSets.delete(docId);
+                showToast(`Removed "${meta.name}" from device.`, 'info');
+              } else {
+                const buf = await getDocumentBuffer(meta);
+                if (buf) {
+                  await ProDrawOfflineDB.saveDocument(meta, buf);
+                  meta.isOffline = true;
+                  state.offlineSets.set(docId, meta);
+                  showToast(`"${meta.name}" is now Available Offline!`, 'success');
+                }
+              }
+              renderDropboxEntries();
+              renderOfflineDrawerList();
+              updateHeaderBar();
+            });
+          }
+          container.appendChild(row);
+        });
+      }
+
+      function renderSheetsDrawerList() {
+        const listEl = document.getElementById('drawerSheetsList');
+        if (!listEl) return;
+        const q = (document.getElementById('sheetSearchInput')?.value || '').trim().toLowerCase();
+        const docs = Array.from(state.projectFiles.values()).filter((d) => !q || d.name.toLowerCase().includes(q));
+        document.getElementById('drawerSheetTotalText').textContent = `${docs.length} Drawing(s)`;
+
+        if (docs.length === 0) {
+          listEl.innerHTML = `<div class="p-4 text-center text-xs text-slate-400">No project drawings loaded yet. Open Dropbox Browser to select a folder.</div>`;
+          return;
+        }
+        listEl.innerHTML = '';
+        docs.forEach((doc) => {
+          const active = state.activeDoc?.docId === doc.docId;
+          const row = document.createElement('div');
+          row.className = `p-2.5 rounded-xl border flex items-center justify-between gap-2 cursor-pointer transition ${
+            active ? 'bg-sky-950/80 border-sky-500 text-white' : 'bg-slate-800/70 hover:bg-slate-800 border-slate-700 text-slate-200'
+          }`;
+          row.innerHTML = `
+            <div class="min-w-0 flex-1">
+              <div class="text-xs font-bold truncate">${escapeHtml(doc.name)}</div>
+              <div class="text-[10px] font-mono text-slate-400">${doc.isOffline ? 'Offline Ready' : 'Dropbox'}</div>
+            </div>
+          `;
+          row.addEventListener('click', async () => {
+            document.getElementById('sheetDrawerOverlay')?.classList.add('hidden');
+            await openBlueprintDocument(doc.docId, 1);
+          });
+          listEl.appendChild(row);
+        });
+      }
+
+      function renderOfflineDrawerList() {
+        const listEl = document.getElementById('drawerOfflineList');
+        const modalList = document.getElementById('modalPanelOffline');
+        const docs = Array.from(state.offlineSets.values());
+        const countEl = document.getElementById('modalOfflineCount');
+        const bytesEl = document.getElementById('drawerOfflineBytesText');
+        if (countEl) countEl.textContent = String(docs.length);
+        if (bytesEl) bytesEl.textContent = `${docs.length} file(s)`;
+
+        [listEl, modalList].forEach((target) => {
+          if (!target) return;
+          if (docs.length === 0) {
+            target.innerHTML = `<div class="p-4 text-center text-xs text-slate-400">No blueprints saved offline on this device yet.</div>`;
+            return;
+          }
+          target.innerHTML = '';
+          docs.forEach((doc) => {
+            const isModal = target === modalList;
+            const row = document.createElement('div');
+            row.className = isModal
+              ? 'p-2.5 rounded-xl bg-white border border-slate-200 flex items-center justify-between gap-2 cursor-pointer'
+              : 'p-2.5 rounded-xl bg-slate-800/80 border border-slate-700 flex items-center justify-between gap-2 cursor-pointer';
+            row.innerHTML = `
+              <div class="min-w-0 flex-1">
+                <div class="text-xs font-bold ${isModal ? 'text-slate-900' : 'text-white'} truncate">${escapeHtml(doc.name)}</div>
+                <div class="text-[10px] font-mono ${isModal ? 'text-emerald-700' : 'text-emerald-400'}">Available Offline</div>
+              </div>
+              <button type="button" data-del-off="1" class="px-2 py-1 rounded bg-rose-500/20 text-rose-400 text-[10px] font-bold">Remove</button>
+            `;
+            row.addEventListener('click', async (e) => {
+              if (e.target.closest('[data-del-off]')) return;
+              document.getElementById('dropboxModal')?.classList.add('hidden');
+              document.getElementById('sheetDrawerOverlay')?.classList.add('hidden');
+              await openBlueprintDocument(doc.docId, 1);
+            });
+            row.querySelector('[data-del-off]')?.addEventListener('click', async (e) => {
+              e.stopPropagation();
+              await ProDrawOfflineDB.removeDocument(doc.docId);
+              doc.isOffline = false;
+              state.offlineSets.delete(doc.docId);
+              renderOfflineDrawerList();
+              updateHeaderBar();
+              showToast(`Removed "${doc.name}" from device.`, 'info');
+            });
+            target.appendChild(row);
+          });
+        });
+      }
+// ... existing code ... -->
       async function getDocumentBuffer(docMeta) {
         if (!docMeta) return null;
         if (state.memoryBlobs.has(docMeta.docId)) {
           return state.memoryBlobs.get(docMeta.docId);
         }
-        const offBlob = await ProDrawDB.getBlob(docMeta.docId);
+        const offBlob = await ProDrawOfflineDB.getBlob(docMeta.docId);
         if (offBlob) {
           state.memoryBlobs.set(docMeta.docId, offBlob);
           return offBlob;
@@ -1130,521 +1562,529 @@
         return null;
       }
 
-      async function getOrLoadPdfProxy(docMeta) {
-        if (state.pdfProxies.has(docMeta.docId)) {
-          return state.pdfProxies.get(docMeta.docId);
+      async function getOrLoadPdfProxy(docId) {
+        if (state.pdfProxies.has(docId)) {
+          return state.pdfProxies.get(docId);
         }
-        await initPdfJs();
-        const buf = await getDocumentBuffer(docMeta);
-        if (!buf) throw new Error(`Could not load PDF buffer for ${docMeta.name}`);
-        const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buf) });
-        const pdfProxy = await loadingTask.promise;
-        state.pdfProxies.set(docMeta.docId, pdfProxy);
-        docMeta.numPages = pdfProxy.numPages;
-        return pdfProxy;
+        const meta = state.projectFiles.get(docId) || state.offlineSets.get(docId);
+        const buf = await getDocumentBuffer(meta);
+        if (!buf) throw new Error('Unable to load PDF binary buffer.');
+        if (window.pdfjsLib && !pdfjsLib.GlobalWorkerOptions.workerSrc) {
+          pdfjsLib.GlobalWorkerOptions.workerSrc =
+            'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        }
+        const loadingTask = pdfjsLib.getDocument({ data: buf.slice(0) });
+        const proxy = await loadingTask.promise;
+        state.pdfProxies.set(docId, proxy);
+        if (meta) meta.numPages = proxy.numPages;
+        return proxy;
       }
 
-      // ---------------------------------------------------------------------
-      // 8. HIGH-DPI TWO-LAYER PDF RENDERING ENGINE
-      // ---------------------------------------------------------------------
-      async function renderActivePageBase(fitOnComplete = false) {
-        const mySerial = ++state.renderSerial;
-        clearDetailCanvas();
-
-        if (state.activeBaseRenderTask && typeof state.activeBaseRenderTask.cancel === 'function') {
-          try { state.activeBaseRenderTask.cancel(); } catch {}
-          state.activeBaseRenderTask = null;
+      async function openBlueprintDocument(docId, pageNum = 1, pushHistory = false) {
+        const meta = state.projectFiles.get(docId) || state.offlineSets.get(docId);
+        if (!meta) {
+          showToast('Target drawing not found.', 'error');
+          return;
+        }
+        if (pushHistory && state.activeDoc) {
+          state.historyStack.push({
+            doc: state.activeDoc,
+            page: state.activePage,
+            zoom: state.zoom,
+            panX: state.panX,
+            panY: state.panY
+          });
         }
 
-        const baseCanvas = document.getElementById('pdfBaseCanvas');
+        const busy = document.getElementById('pdfBusyIndicator');
+        const busyText = document.getElementById('pdfBusyText');
+        if (busyText) busyText.textContent = `Opening ${meta.name}...`;
+        busy?.classList.remove('hidden');
+
+        try {
+          const proxy = await getOrLoadPdfProxy(docId);
+          state.activeDoc = meta;
+          state.activeDocId = docId;
+          state.activePage = Math.min(Math.max(1, Number(pageNum) || 1), proxy.numPages || 1);
+          await renderActivePageBase(true);
+          updateHeaderBar();
+          renderSheetsDrawerList();
+        } catch (err) {
+          showToast(`Error opening PDF: ${err.message}`, 'error', 4500);
+        } finally {
+          busy?.classList.add('hidden');
+        }
+      }
+
+      async function renderActivePageBase(shouldFit = true) {
         const stage = document.getElementById('drawingStage');
-        const emptyState = document.getElementById('emptyViewportState');
-        if (!baseCanvas || !stage) return;
+        const emptyEl = document.getElementById('emptyViewportState');
+        const baseCanvas = document.getElementById('pdfBaseCanvas');
+        const detailCanvas = document.getElementById('pdfDetailCanvas');
 
         if (!state.activeDoc) {
-          stage.classList.add('hidden');
-          emptyState?.classList.remove('hidden');
-          renderCalloutOverlays();
+          stage?.classList.add('hidden');
+          emptyEl?.classList.remove('hidden');
           updateHeaderBar();
           return;
         }
 
-        stage.classList.remove('hidden');
-        emptyState?.classList.add('hidden');
+        stage?.classList.remove('hidden');
+        emptyEl?.classList.add('hidden');
+        detailCanvas?.classList.add('hidden');
+
+        const serial = ++state.renderSerial;
+        const proxy = await getOrLoadPdfProxy(state.activeDoc.docId);
+        if (serial !== state.renderSerial) return;
+
+        const page = await proxy.getPage(state.activePage);
+        if (serial !== state.renderSerial) return;
+
+        const unscaled = page.getViewport({ scale: 1 });
+        state.stageW = unscaled.width;
+        state.stageH = unscaled.height;
+
+        stage.style.width = `${state.stageW}px`;
+        stage.style.height = `${state.stageH}px`;
+
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const maxSide = 4096;
+        const targetScale = Math.min(
+          dpr * state.qualityMultiplier * 1.5,
+          maxSide / Math.max(state.stageW, state.stageH)
+        );
+        const vp = page.getViewport({ scale: Math.max(1, targetScale) });
+
+        baseCanvas.width = Math.floor(vp.width);
+        baseCanvas.height = Math.floor(vp.height);
+        baseCanvas.style.width = `${state.stageW}px`;
+        baseCanvas.style.height = `${state.stageH}px`;
+
+        if (state.activeBaseRenderTask) {
+          try { state.activeBaseRenderTask.cancel(); } catch {}
+        }
+
+        const ctx = baseCanvas.getContext('2d', { alpha: false });
+        const renderTask = page.render({ canvasContext: ctx, viewport: vp });
+        state.activeBaseRenderTask = renderTask;
 
         try {
-          const pdfProxy = await getOrLoadPdfProxy(state.activeDoc);
-          const page = await pdfProxy.getPage(state.activePage);
-          const unscaledVp = page.getViewport({ scale: 1.0 });
-
-          state.baseWidth = unscaledVp.width;
-          state.baseHeight = unscaledVp.height;
-
-          const baseScale = 2.0;
-          const vp = page.getViewport({ scale: baseScale });
-
-          baseCanvas.width = Math.round(vp.width);
-          baseCanvas.height = Math.round(vp.height);
-          baseCanvas.style.width = `${state.baseWidth}px`;
-          baseCanvas.style.height = `${state.baseHeight}px`;
-
-          stage.style.width = `${state.baseWidth}px`;
-          stage.style.height = `${state.baseHeight}px`;
-
-          const ctx = baseCanvas.getContext('2d');
-          ctx.clearRect(0, 0, baseCanvas.width, baseCanvas.height);
-
-          const renderTask = page.render({ canvasContext: ctx, viewport: vp });
-          state.activeBaseRenderTask = renderTask;
-
           await renderTask.promise;
-          if (mySerial !== state.renderSerial) return;
-
-          state.renderedScale = baseScale;
-          applyStageTransform();
-          renderCalloutOverlays();
-          updateHeaderBar();
-
-          if (fitOnComplete) {
-            fitViewport('page');
-          }
         } catch (err) {
-          if (err?.name !== 'RenderingCancelledException') {
-            console.error('Render base error:', err);
-          }
+          if (err?.name !== 'RenderingCancelledException') throw err;
+          return;
         }
-      }
 
-      function clearDetailCanvas() {
-        const detailCanvas = document.getElementById('pdfDetailCanvas');
-        if (detailCanvas) {
-          const ctx = detailCanvas.getContext('2d');
-          ctx.clearRect(0, 0, detailCanvas.width, detailCanvas.height);
-          detailCanvas.classList.add('hidden');
-        }
+        if (shouldFit) fitViewport('page');
+        else applyStageTransform();
+
+        renderCalloutOverlays();
+        updateHeaderBar();
+        scheduleViewportDetailRender();
       }
 
       function scheduleViewportDetailRender() {
-        if (!state.activeDoc) return;
-        if (state.detailDebounceTimer) clearTimeout(state.detailDebounceTimer);
-        if (state.zoom <= 1.05) {
-          clearDetailCanvas();
-          return;
-        }
-        state.detailDebounceTimer = setTimeout(() => { renderViewportDetailLayer(); }, 130);
-      }
-
-      async function renderViewportDetailLayer() {
+        clearTimeout(state.detailDebounceTimer);
         if (!state.activeDoc || state.zoom <= 1.05) {
-          clearDetailCanvas();
+          document.getElementById('pdfDetailCanvas')?.classList.add('hidden');
           return;
         }
-        const mySerial = ++state.detailRenderSerial;
-        const detailCanvas = document.getElementById('pdfDetailCanvas');
-        if (!detailCanvas) return;
-
-        try {
-          const pdfProxy = await getOrLoadPdfProxy(state.activeDoc);
-          const page = await pdfProxy.getPage(state.activePage);
-
-          const vp = page.getViewport({ scale: state.zoom * state.qualityMultiplier });
-          detailCanvas.width = Math.round(vp.width);
-          detailCanvas.height = Math.round(vp.height);
-          detailCanvas.style.width = `${vp.width / state.qualityMultiplier}px`;
-          detailCanvas.style.height = `${vp.height / state.qualityMultiplier}px`;
-          detailCanvas.style.left = `0px`;
-          detailCanvas.style.top = `0px`;
-
-          const ctx = detailCanvas.getContext('2d');
-          ctx.clearRect(0, 0, detailCanvas.width, detailCanvas.height);
-
-          const task = page.render({ canvasContext: ctx, viewport: vp });
-          state.activeDetailRenderTask = task;
-          await task.promise;
-
-          if (mySerial !== state.detailRenderSerial) return;
-          detailCanvas.classList.remove('hidden');
-        } catch (err) {
-          if (err?.name !== 'RenderingCancelledException') {
-            console.error('Render detail error:', err);
-          }
-        }
+        state.detailDebounceTimer = setTimeout(() => renderViewportDetailOverlay(), 140);
       }
 
-      function applyStageTransform() {
-        const stage = document.getElementById('drawingStage');
-        if (!stage) return;
-        stage.style.transform = `translate(${state.panX}px, ${state.panY}px) scale(${state.zoom})`;
-        const pctEl = document.getElementById('zoomPercentLabel');
-        if (pctEl) pctEl.textContent = `${Math.round(state.zoom * 100)}%`;
+      async function renderViewportDetailOverlay() {
+        if (!state.activeDoc || state.zoom <= 1.05 || state.isInteracting) return;
+        const viewport = document.getElementById('canvasViewport');
+        const detailCanvas = document.getElementById('pdfDetailCanvas');
+        if (!viewport || !detailCanvas) return;
+
+        const serial = ++state.detailRenderSerial;
+        const proxy = await getOrLoadPdfProxy(state.activeDoc.docId);
+        const page = await proxy.getPage(state.activePage);
+        if (serial !== state.detailRenderSerial) return;
+
+        const vw = viewport.clientWidth;
+        const vh = viewport.clientHeight;
+        const margin = 0.2;
+
+        const leftStage = Math.max(0, (-state.panX / state.zoom) - (vw / state.zoom) * margin);
+        const topStage = Math.max(0, (-state.panY / state.zoom) - (vh / state.zoom) * margin);
+        const rightStage = Math.min(state.stageW, ((-state.panX + vw) / state.zoom) + (vw / state.zoom) * margin);
+        const bottomStage = Math.min(state.stageH, ((-state.panY + vh) / state.zoom) + (vh / state.zoom) * margin);
+
+        const cropW = rightStage - leftStage;
+        const cropH = bottomStage - topStage;
+        if (cropW <= 10 || cropH <= 10) return;
+
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const effScale = Math.min(state.zoom * dpr * state.qualityMultiplier, 4096 / Math.max(cropW, cropH));
+        const outW = Math.floor(cropW * effScale);
+        const outH = Math.floor(cropH * effScale);
+        if (outW <= 0 || outH <= 0) return;
+
+        const offscreen = document.createElement('canvas');
+        offscreen.width = outW;
+        offscreen.height = outH;
+
+        const vp = page.getViewport({
+          scale: effScale,
+          offsetX: -leftStage * effScale,
+          offsetY: -topStage * effScale
+        });
+
+        const task = page.render({ canvasContext: offscreen.getContext('2d', { alpha: false }), viewport: vp });
+        try {
+          await task.promise;
+        } catch {
+          return;
+        }
+        if (serial !== state.detailRenderSerial) return;
+
+        detailCanvas.width = outW;
+        detailCanvas.height = outH;
+        detailCanvas.style.left = `${leftStage}px`;
+        detailCanvas.style.top = `${topStage}px`;
+        detailCanvas.style.width = `${cropW}px`;
+        detailCanvas.style.height = `${cropH}px`;
+        detailCanvas.getContext('2d').drawImage(offscreen, 0, 0);
+        detailCanvas.classList.remove('hidden');
       }
 
       function fitViewport(mode = 'page') {
-        const vp = document.getElementById('canvasViewport');
-        if (!vp || !state.activeDoc) return;
-        const rect = vp.getBoundingClientRect();
-        const availW = rect.width - 40;
-        const availH = rect.height - 40;
-
-        let targetZoom = 1;
-        if (mode === 'width') {
-          targetZoom = availW / state.baseWidth;
-        } else if (mode === '100') {
-          targetZoom = 1.0;
-        } else if (mode === '200') {
-          targetZoom = 2.0;
-        } else {
-          targetZoom = Math.min(availW / state.baseWidth, availH / state.baseHeight);
-        }
-
-        state.zoom = Math.max(state.minZoom, Math.min(state.maxZoom, targetZoom));
-        state.panX = (rect.width - state.baseWidth * state.zoom) / 2;
-        state.panY = (rect.height - state.baseHeight * state.zoom) / 2;
-
+        const viewport = document.getElementById('canvasViewport');
+        if (!viewport || !state.stageW || !state.stageH) return;
+        const pad = 24;
+        const availW = Math.max(100, viewport.clientWidth - pad * 2);
+        const availH = Math.max(100, viewport.clientHeight - pad * 2);
+        const nextZoom = mode === 'width'
+          ? availW / state.stageW
+          : Math.min(availW / state.stageW, availH / state.stageH);
+        state.zoom = Math.min(state.maxZoom, Math.max(state.minZoom, nextZoom));
+        state.panX = (viewport.clientWidth - state.stageW * state.zoom) / 2;
+        state.panY = (viewport.clientHeight - state.stageH * state.zoom) / 2;
         applyStageTransform();
         scheduleViewportDetailRender();
       }
 
-      // ---------------------------------------------------------------------
-      // 9. HEADER & DRAWER UI CONTROLS
-      // ---------------------------------------------------------------------
-      function updateHeaderBar() {
-        const doc = state.activeDoc;
-        const srcTag = document.getElementById('activeSetSourceTag');
-        const pillText = document.getElementById('activeSheetPillText');
-        const stepperWrap = document.getElementById('multiPageStepperWrap');
-        const pageInd = document.getElementById('multiPageIndicatorText');
-        const backPill = document.getElementById('backHistoryPillBtn');
-        const backPillText = document.getElementById('backHistoryPillText');
-
-        if (srcTag) {
-          if (!doc) srcTag.textContent = 'PDF';
-          else if (doc.isOffline) srcTag.textContent = 'OFFLINE';
-          else srcTag.textContent = doc.source === 'dropbox' ? 'DROPBOX' : 'LOCAL';
+      function applyStageTransform() {
+        const stage = document.getElementById('sheetStage') || document.getElementById('drawingStage');
+        if (stage) {
+          stage.style.transform = `translate3d(${state.panX}px, ${state.panY}px, 0) scale(${state.zoom})`;
         }
-
-        if (pillText) {
-          pillText.textContent = doc ? (doc.numPages > 1 ? `${doc.name} (Pg ${state.activePage}/${doc.numPages})` : doc.name) : 'Select Blueprint...';
-        }
-
-        if (stepperWrap && pageInd) {
-          const total = doc?.numPages || 1;
-          if (doc && total > 1) {
-            stepperWrap.classList.remove('hidden');
-            stepperWrap.classList.add('flex');
-            pageInd.textContent = `${state.activePage}/${total}`;
-          } else {
-            stepperWrap.classList.add('hidden');
-            stepperWrap.classList.remove('flex');
-          }
-        }
-
-        if (backPill && backPillText) {
-          if (state.historyStack.length > 0) {
-            const top = state.historyStack[state.historyStack.length - 1];
-            backPillText.textContent = `← Back to ${top.label}`;
-            backPill.classList.remove('hidden');
-            backPill.classList.add('flex');
-          } else {
-            backPill.classList.add('hidden');
-            backPill.classList.remove('flex');
-          }
-        }
-
-        const saveBtn = document.getElementById('saveOfflineBtn');
-        const saveLabel = document.getElementById('saveOfflineLabel');
-        const badgePill = document.getElementById('offlineBadgePill');
-        const isOff = Boolean(doc && doc.isOffline);
-
-        if (saveBtn && saveLabel && badgePill) {
-          if (isOff) {
-            saveLabel.textContent = 'Available Offline';
-            badgePill.textContent = 'ON';
-            badgePill.className = 'text-[10px] font-mono uppercase px-1.5 py-0.2 rounded bg-emerald-500/25 text-emerald-300 border border-emerald-500/40';
-            badgePill.classList.remove('hidden');
-            saveBtn.className = 'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-950/90 hover:bg-rose-950/90 text-emerald-200 border border-emerald-700/80 transition shrink-0';
-          } else {
-            saveLabel.textContent = 'Available Offline';
-            badgePill.textContent = 'OFF';
-            badgePill.className = 'text-[10px] font-mono uppercase px-1.5 py-0.2 rounded bg-slate-700 text-slate-300 border border-slate-600';
-            badgePill.classList.remove('hidden');
-            saveBtn.className = 'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 transition shrink-0';
-          }
-        }
-
-        const sheetsCountEl = document.getElementById('drawerTabSheetsCount');
-        const linksCountEl = document.getElementById('drawerTabLinksCount');
-        const offlineCountEl = document.getElementById('drawerTabOfflineCount');
-        if (sheetsCountEl) sheetsCountEl.textContent = String(state.projectFiles.size);
-        if (linksCountEl) linksCountEl.textContent = String(state.calloutLinks.length);
-        if (offlineCountEl) offlineCountEl.textContent = String(state.offlineSets.size);
+        const zoomLabel = document.getElementById('zoomPercentLabel');
+        if (zoomLabel) zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
       }
 
-      // ---------------------------------------------------------------------
-      // 10. CALLOUT OVERLAYS & CROSS-SHEET LINKING
-      // ---------------------------------------------------------------------
+      function updateHeaderBar() {
+        const pillText = document.getElementById('activeSheetPillText');
+        const sourceTag = document.getElementById('activeSetSourceTag');
+        const stepper = document.getElementById('multiPageStepperWrap');
+        const pageInd = document.getElementById('multiPageIndicatorText');
+        const offLabel = document.getElementById('saveOfflineLabel');
+        const offPill = document.getElementById('offlineBadgePill');
+        const backBtn = document.getElementById('backHistoryPillBtn');
+        const backText = document.getElementById('backHistoryPillText');
+
+        if (!state.activeDoc) {
+          if (pillText) pillText.textContent = 'Select Blueprint...';
+          if (sourceTag) sourceTag.textContent = 'PDF';
+          stepper?.classList.add('hidden');
+          if (offLabel) offLabel.textContent = 'Available Offline';
+          offPill?.classList.add('hidden');
+        } else {
+          if (pillText) pillText.textContent = state.activeDoc.name;
+          if (sourceTag) sourceTag.textContent = state.activeDoc.source === 'dropbox' ? 'DBX' : 'PDF';
+          const total = state.activeDoc.numPages || 1;
+          if (total > 1) {
+            stepper?.classList.remove('hidden');
+            stepper?.classList.add('flex');
+            if (pageInd) pageInd.textContent = `${state.activePage}/${total}`;
+          } else {
+            stepper?.classList.add('hidden');
+          }
+
+          const isOff = state.offlineSets.has(state.activeDoc.docId);
+          if (offPill) {
+            offPill.classList.remove('hidden');
+            offPill.textContent = isOff ? 'ON' : 'OFF';
+            offPill.className = isOff
+              ? 'text-[10px] font-mono uppercase px-1.5 py-0.2 rounded bg-emerald-500/25 text-emerald-300 border border-emerald-500/50'
+              : 'text-[10px] font-mono uppercase px-1.5 py-0.2 rounded bg-slate-700 text-slate-300 border border-slate-600';
+          }
+        }
+
+        if (state.historyStack.length > 0) {
+          const prev = state.historyStack[state.historyStack.length - 1];
+          backBtn?.classList.remove('hidden');
+          backBtn?.classList.add('flex');
+          if (backText) backText.textContent = `← Back to ${prev.doc.name} (Pg ${prev.page})`;
+        } else {
+          backBtn?.classList.add('hidden');
+          backBtn?.classList.remove('flex');
+        }
+
+        const linksCountEl = document.getElementById('drawerTabLinksCount');
+        const sheetsCountEl = document.getElementById('drawerTabSheetsCount');
+        const offCountEl = document.getElementById('drawerTabOfflineCount');
+        if (linksCountEl) linksCountEl.textContent = String(state.calloutLinks.length);
+        if (sheetsCountEl) sheetsCountEl.textContent = String(state.projectFiles.size);
+        if (offCountEl) offCountEl.textContent = String(state.offlineSets.size);
+      }
+
+      async function toggleActiveDocOffline() {
+        if (!state.activeDoc) {
+          showToast('Open a blueprint first.', 'info');
+          return;
+        }
+        const docId = state.activeDoc.docId;
+        if (state.offlineSets.has(docId)) {
+          await ProDrawOfflineDB.removeDocument(docId);
+          state.activeDoc.isOffline = false;
+          state.offlineSets.delete(docId);
+          showToast(`Removed "${state.activeDoc.name}" from device.`, 'info');
+        } else {
+          const buf = await getDocumentBuffer(state.activeDoc);
+          if (buf) {
+            await ProDrawOfflineDB.saveDocument(state.activeDoc, buf);
+            state.activeDoc.isOffline = true;
+            state.offlineSets.set(docId, state.activeDoc);
+            showToast(`"${state.activeDoc.name}" is now Available Offline!`, 'success');
+          }
+        }
+        updateHeaderBar();
+        renderOfflineDrawerList();
+      }
+
       function renderCalloutOverlays() {
         const layer = document.getElementById('calloutOverlayLayer');
         if (!layer) return;
         layer.innerHTML = '';
         if (!state.activeDoc) return;
 
-        const currentDocId = state.activeDoc.docId;
-        const currentPage = state.activePage;
+        const pageLinks = state.calloutLinks.filter(
+          (l) => l.sourceDocId === state.activeDoc.docId && Number(l.sourcePage) === Number(state.activePage)
+        );
 
-        const activeLinks = state.calloutLinks.filter((link) => {
-          return Number(link.sourcePage) === Number(currentPage) && link.sourceDocId === currentDocId;
-        });
-
-        activeLinks.forEach((link) => {
+        pageLinks.forEach((link) => {
           const badge = document.createElement('div');
-          badge.className = `callout-badge callout-color-${link.color || 'blue'} ${link.shape === 'circle' ? 'rounded-full' : 'rounded'}`;
-          badge.style.left = `${link.x * 100}%`;
-          badge.style.top = `${link.y * 100}%`;
-          badge.style.width = `${Math.max(0.015, link.w) * 100}%`;
-          badge.style.height = `${Math.max(0.02, link.h) * 100}%`;
+          const colorCls = link.color === 'amber' ? 'callout-color-amber'
+            : link.color === 'emerald' ? 'callout-color-emerald'
+            : 'callout-color-blue';
+          badge.className = `callout-badge ${colorCls}`;
+          badge.style.left = `${(link.x * 100).toFixed(4)}%`;
+          badge.style.top = `${(link.y * 100).toFixed(4)}%`;
+          badge.style.width = `${((link.w || 0.018) * 100).toFixed(4)}%`;
+          badge.style.height = `${((link.h || 0.026) * 100).toFixed(4)}%`;
+          badge.title = `${link.label} → ${link.targetDocName} (Pg ${link.targetPage})`;
 
-          badge.title = link.label ? `${link.label} — Click to Open Target` : 'Callout Link';
-          badge.addEventListener('click', (e) => {
+          badge.addEventListener('click', async (e) => {
             e.stopPropagation();
-            activateCalloutLink(link);
+            if (state.addLinkMode) return;
+            await openBlueprintDocument(link.targetDocId, link.targetPage || 1, true);
           });
           layer.appendChild(badge);
         });
       }
 
-      async function activateCalloutLink(link) {
-        if (!link || !state.activeDoc) return;
-        const sourceLabel = `${state.activeDoc.name.replace(/\.pdf$/i, '')} (Pg ${state.activePage})`;
+      function bindViewportInteractions() {
+        const viewport = document.getElementById('canvasViewport');
+        const rubberband = document.getElementById('calloutRubberband');
+        if (!viewport) return;
 
-        if (link.targetDocId === state.activeDoc.docId) {
-          state.historyStack.push({
-            doc: { ...state.activeDoc },
-            page: state.activePage,
-            zoom: state.zoom,
-            panX: state.panX,
-            panY: state.panY,
-            label: sourceLabel
-          });
-          state.activePage = Math.max(1, Number(link.targetPage) || 1);
-          await renderActivePageBase(true);
-          flashTargetArrivalRing();
-          return;
-        }
+        const clientToNorm = (clientX, clientY) => {
+          const rect = viewport.getBoundingClientRect();
+          const stageX = (clientX - rect.left - state.panX) / state.zoom;
+          const stageY = (clientY - rect.top - state.panY) / state.zoom;
+          return {
+            x: Math.max(0, Math.min(1, stageX / (state.stageW || 1))),
+            y: Math.max(0, Math.min(1, stageY / (state.stageH || 1)))
+          };
+        };
 
-        const targetDocMeta = state.projectFiles.get(link.targetDocId) || state.offlineSets.get(link.targetDocId);
-        if (!targetDocMeta) {
-          showToast(`Target document "${link.targetDocName || link.targetDocId}" is not currently in your project folder or offline library.`, 'warning');
-          return;
-        }
+        viewport.addEventListener('wheel', (e) => {
+          if (!state.activeDoc) return;
+          e.preventDefault();
+          const rect = viewport.getBoundingClientRect();
+          const mx = e.clientX - rect.left;
+          const my = e.clientY - rect.top;
+          const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+          const nextZoom = Math.min(state.maxZoom, Math.max(state.minZoom, state.zoom * factor));
+          state.panX = mx - (mx - state.panX) * (nextZoom / state.zoom);
+          state.panY = my - (my - state.panY) * (nextZoom / state.zoom);
+          state.zoom = nextZoom;
+          applyStageTransform();
+          scheduleViewportDetailRender();
+        }, { passive: false });
 
-        state.historyStack.push({
-          doc: { ...state.activeDoc },
-          page: state.activePage,
-          zoom: state.zoom,
-          panX: state.panX,
-          panY: state.panY,
-          label: sourceLabel
-        });
+        viewport.addEventListener('pointerdown', (e) => {
+          if (!state.activeDoc) return;
+          if (e.target.closest('.callout-badge') || e.target.closest('button')) return;
 
-        await openBlueprintDocument(link.targetDocId, link.targetPage || 1);
-      }
+          viewport.setPointerCapture(e.pointerId);
+          state.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-      function flashTargetArrivalRing() {
-        const stage = document.getElementById('drawingStage');
-        if (!stage) return;
-        const ring = document.createElement('div');
-        ring.className = 'target-flash-ring';
-        ring.style.left = '50%';
-        ring.style.top = '50%';
-        stage.appendChild(ring);
-        setTimeout(() => ring.remove(), 1200);
-      }
-
-      // ---------------------------------------------------------------------
-      // 11. BLUEPRINT DOCUMENT OPENING & OFFLINE TOGGLE
-      // ---------------------------------------------------------------------
-      async function openBlueprintDocument(docId, pageNum = 1) {
-        let meta = state.projectFiles.get(docId) || state.offlineSets.get(docId);
-        if (!meta) {
-          showToast('Blueprint document not found.', 'error');
-          return;
-        }
-
-        setBusyIndicator(true, `Loading ${meta.name}...`);
-        try {
-          const buf = await getDocumentBuffer(meta);
-          if (!buf) throw new Error(`Could not load PDF buffer for ${meta.name}`);
-          state.memoryBlobs.set(docId, buf);
-
-          const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buf) });
-          const pdfProxy = await loadingTask.promise;
-          state.pdfProxies.set(docId, pdfProxy);
-          meta.numPages = pdfProxy.numPages;
-
-          state.activeDoc = meta;
-          state.activeDocId = docId;
-          state.activePage = Math.max(1, Math.min(pageNum, pdfProxy.numPages));
-
-          await renderActivePageBase(true);
-          setBusyIndicator(false);
-          showToast(`Loaded: ${meta.name}`, 'success');
-        } catch (err) {
-          setBusyIndicator(false);
-          console.error('Open blueprint error:', err);
-          showToast(`Failed to open blueprint: ${err.message}`, 'error');
-        }
-      }
-
-      async function toggleActiveDocOffline() {
-        const doc = state.activeDoc;
-        if (!doc) {
-          showToast('Open a blueprint first before toggling offline status.', 'warning');
-          return;
-        }
-
-        if (doc.isOffline) {
-          await ProDrawOfflineDB.removeDocument(doc.docId);
-          doc.isOffline = false;
-          state.offlineSets.delete(doc.docId);
-          showToast(`Removed "${doc.name}" from device offline storage.`, 'info');
-        } else {
-          const buf = await getDocumentBuffer(doc);
-          if (!buf) {
-            showToast('Unable to download PDF buffer for offline storage.', 'error');
+          if (state.addLinkMode && state.activePointers.size === 1) {
+            state.isDrawingCallout = true;
+            const pt = clientToNorm(e.clientX, e.clientY);
+            state.drawStartNormX = pt.x;
+            state.drawStartNormY = pt.y;
+            if (rubberband) {
+              rubberband.style.left = `${pt.x * 100}%`;
+              rubberband.style.top = `${pt.y * 100}%`;
+              rubberband.style.width = '0%';
+              rubberband.style.height = '0%';
+              rubberband.classList.remove('hidden');
+            }
             return;
           }
-          await ProDrawOfflineDB.saveDocument(doc, buf);
-          doc.isOffline = true;
-          state.offlineSets.set(doc.docId, doc);
-          showToast(`"${doc.name}" is now Available Offline!`, 'success');
-        }
-        updateHeaderBar();
-      }
 
-      function setBusyIndicator(busy, text = 'Loading...') {
-        const el = document.getElementById('pdfBusyIndicator');
-        const label = document.getElementById('pdfBusyText');
-        if (!el) return;
-        if (busy) {
-          if (label) label.textContent = text;
-          el.classList.remove('hidden');
-          el.classList.add('flex');
-        } else {
-          el.classList.add('hidden');
-          el.classList.remove('flex');
-        }
-      }
-
-      // ---------------------------------------------------------------------
-      // 12. INITIALIZATION & EVENT BINDINGS
-      // ---------------------------------------------------------------------
-      function bindViewportInteractions() {
-        const vp = document.getElementById('canvasViewport');
-        if (!vp) return;
-
-        vp.addEventListener('pointerdown', (e) => {
-          state.activePointers.set(e.pointerId, e);
           if (state.activePointers.size === 1) {
-            if (state.addLinkMode && state.activeDoc) {
-              const rect = document.getElementById('drawingStage').getBoundingClientRect();
-              const stageX = (e.clientX - rect.left) / state.zoom;
-              const stageY = (e.clientY - rect.top) / state.zoom;
-              if (stageX >= 0 && stageY >= 0 && stageX <= state.baseWidth && stageY <= state.baseHeight) {
-                state.isDrawingCallout = true;
-                state.drawStartNormX = stageX / state.baseWidth;
-                state.drawStartNormY = stageY / state.baseHeight;
-              }
-              return;
-            }
-
             state.isDraggingPan = true;
+            state.isInteracting = true;
             state.panStartX = e.clientX;
             state.panStartY = e.clientY;
             state.panOriginX = state.panX;
             state.panOriginY = state.panY;
-            vp.setPointerCapture(e.pointerId);
+            viewport.classList.replace('cursor-grab', 'cursor-grabbing');
+          } else if (state.activePointers.size === 2) {
+            state.isDraggingPan = false;
+            const pts = Array.from(state.activePointers.values());
+            state.pinchStartDist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y) || 1;
+            state.pinchStartZoom = state.zoom;
           }
         });
 
-        vp.addEventListener('pointermove', (e) => {
+        viewport.addEventListener('pointermove', (e) => {
           if (!state.activePointers.has(e.pointerId)) return;
-          state.activePointers.set(e.pointerId, e);
+          state.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-          if (state.isDrawingCallout && state.activeDoc) {
-            const rect = document.getElementById('drawingStage').getBoundingClientRect();
-            const stageX = Math.max(0, Math.min(state.baseWidth, (e.clientX - rect.left) / state.zoom));
-            const stageY = Math.max(0, Math.min(state.baseHeight, (e.clientY - rect.top) / state.zoom));
-            const currNormX = stageX / state.baseWidth;
-            const currNormY = stageY / state.baseHeight;
-
-            const x = Math.min(state.drawStartNormX, currNormX);
-            const y = Math.min(state.drawStartNormY, currNormY);
-            const w = Math.max(0.015, Math.abs(currNormX - state.drawStartNormX));
-            const h = Math.max(0.02, Math.abs(currNormY - state.drawStartNormY));
-
-            state.pendingRectNorm = { x, y, w, h };
-            const rb = document.getElementById('calloutRubberband');
-            if (rb) {
-              rb.style.left = `${x * 100}%`;
-              rb.style.top = `${y * 100}%`;
-              rb.style.width = `${w * 100}%`;
-              rb.style.height = `${h * 100}%`;
-              rb.classList.remove('hidden');
+          if (state.isDrawingCallout) {
+            const pt = clientToNorm(e.clientX, e.clientY);
+            const x = Math.min(state.drawStartNormX, pt.x);
+            const y = Math.min(state.drawStartNormY, pt.y);
+            const w = Math.abs(pt.x - state.drawStartNormX);
+            const h = Math.abs(pt.y - state.drawStartNormY);
+            if (rubberband) {
+              rubberband.style.left = `${x * 100}%`;
+              rubberband.style.top = `${y * 100}%`;
+              rubberband.style.width = `${w * 100}%`;
+              rubberband.style.height = `${h * 100}%`;
             }
             return;
           }
 
-          if (state.isDraggingPan) {
-            const dx = e.clientX - state.panStartX;
-            const dy = e.clientY - state.panStartY;
-            state.panX = state.panOriginX + dx;
-            state.panY = state.panOriginY + dy;
+          if (state.activePointers.size === 2) {
+            const pts = Array.from(state.activePointers.values());
+            const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+            const midX = (pts[0].x + pts[1].x) / 2;
+            const midY = (pts[0].y + pts[1].y) / 2;
+            const rect = viewport.getBoundingClientRect();
+            const vx = midX - rect.left;
+            const vy = midY - rect.top;
+            const nextZoom = Math.min(
+              state.maxZoom,
+              Math.max(state.minZoom, state.pinchStartZoom * (dist / state.pinchStartDist))
+            );
+            state.panX = vx - (vx - state.panX) * (nextZoom / state.zoom);
+            state.panY = vy - (vy - state.panY) * (nextZoom / state.zoom);
+            state.zoom = nextZoom;
             applyStageTransform();
-            scheduleViewportDetailRender();
+            return;
+          }
+
+          if (state.isDraggingPan) {
+            state.panX = state.panOriginX + (e.clientX - state.panStartX);
+            state.panY = state.panOriginY + (e.clientY - state.panStartY);
+            applyStageTransform();
           }
         });
 
         const endPointer = (e) => {
+          state.activePointers.delete(e.pointerId);
           if (state.isDrawingCallout) {
             state.isDrawingCallout = false;
-            const rb = document.getElementById('calloutRubberband');
-            rb?.classList.add('hidden');
-            if (state.pendingRectNorm) {
-              openCalloutModalForNewLink(state.pendingRectNorm);
-            }
-            state.pendingRectNorm = null;
+            rubberband?.classList.add('hidden');
+            const pt = clientToNorm(e.clientX, e.clientY);
+            const rawW = Math.abs(pt.x - state.drawStartNormX);
+            const rawH = Math.abs(pt.y - state.drawStartNormY);
+            const normRect = rawW < 0.005 && rawH < 0.005
+              ? {
+                  x: Math.max(0, Math.min(0.982, pt.x - 0.009)),
+                  y: Math.max(0, Math.min(0.974, pt.y - 0.013)),
+                  w: 0.018,
+                  h: 0.026
+                }
+              : {
+                  x: Math.min(state.drawStartNormX, pt.x),
+                  y: Math.min(state.drawStartNormY, pt.y),
+                  w: Math.max(0.005, rawW),
+                  h: Math.max(0.005, rawH)
+                };
+            openCalloutModalForNewLink(normRect);
           }
-          state.activePointers.delete(e.pointerId);
+
           if (state.activePointers.size === 0) {
             state.isDraggingPan = false;
+            state.isInteracting = false;
+            viewport.classList.replace('cursor-grabbing', 'cursor-grab');
+            scheduleViewportDetailRender();
           }
         };
 
-        vp.addEventListener('pointerup', endPointer);
-        vp.addEventListener('pointercancel', endPointer);
-
-        vp.addEventListener('wheel', (e) => {
-          e.preventDefault();
-          const rect = vp.getBoundingClientRect();
-          const mouseX = e.clientX - rect.left;
-          const mouseY = e.clientY - rect.top;
-
-          const zoomFactor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
-          const newZoom = Math.max(state.minZoom, Math.min(state.maxZoom, state.zoom * zoomFactor));
-
-          state.panX = mouseX - (mouseX - state.panX) * (newZoom / state.zoom);
-          state.panY = mouseY - (mouseY - state.panY) * (newZoom / state.zoom);
-          state.zoom = newZoom;
-
-          applyStageTransform();
-          scheduleViewportDetailRender();
-        }, { passive: false });
+        viewport.addEventListener('pointerup', endPointer);
+        viewport.addEventListener('pointercancel', endPointer);
       }
 
       function openCalloutModalForNewLink(normRect) {
-        state.editingCalloutId = null;
+        state.editingLinkId = null;
+        state.pendingRectNorm = normRect;
+        const srcSub = document.getElementById('calloutModalSourceSubtitle');
+        if (srcSub && state.activeDoc) {
+          srcSub.textContent = `From: ${state.activeDoc.name} (Page ${state.activePage})`;
+        }
+        document.getElementById('calloutLabelInput').value = '';
+        document.getElementById('calloutDetailTitleInput').value = '';
+        document.getElementById('calloutTargetPageInput').value = '1';
+        renderCalloutTargetCandidates();
         document.getElementById('calloutModal').classList.remove('hidden');
+      }
+
+      function renderCalloutTargetCandidates() {
+        const listEl = document.getElementById('calloutTargetListContainer');
+        if (!listEl) return;
+        const q = (document.getElementById('targetSearchInput')?.value || '').trim().toLowerCase();
+        const docs = Array.from(state.projectFiles.values()).filter((d) => !q || d.name.toLowerCase().includes(q));
+        listEl.innerHTML = '';
+
+        if (docs.length === 0) {
+          listEl.innerHTML = `<div class="p-3 text-xs text-slate-500">No project PDFs available.</div>`;
+          return;
+        }
+
+        if (!state.selectedTargetKey && docs.length > 0) {
+          state.selectedTargetKey = docs[0].docId;
+        }
+
+        docs.forEach((doc) => {
+          const selected = state.selectedTargetKey === doc.docId;
+          const row = document.createElement('button');
+          row.type = 'button';
+          row.className = `w-full text-left px-3 py-2 text-xs flex items-center justify-between gap-2 ${
+            selected ? 'bg-sky-50 text-sky-950 font-bold' : 'hover:bg-slate-50 text-slate-800'
+          }`;
+          row.innerHTML = `<span class="truncate">${escapeHtml(doc.name)}</span><span class="text-[10px] font-mono text-slate-400">${selected ? 'Selected' : ''}</span>`;
+          row.addEventListener('click', () => {
+            state.selectedTargetKey = doc.docId;
+            document.getElementById('selectedTargetSummaryText').textContent = `${doc.name} (Pg ${document.getElementById('calloutTargetPageInput')?.value || 1})`;
+            renderCalloutTargetCandidates();
+          });
+          listEl.appendChild(row);
+        });
+
+        const chosen = state.projectFiles.get(state.selectedTargetKey);
+        if (chosen) {
+          document.getElementById('selectedTargetSummaryText').textContent = `${chosen.name} (Pg ${document.getElementById('calloutTargetPageInput')?.value || 1})`;
+        }
       }
 
       function closeCalloutModal() {
@@ -1653,6 +2093,12 @@
 
       function bindAllUIEvents() {
         document.getElementById('openSheetDrawerBtn')?.addEventListener('click', () => {
+          renderSheetsDrawerList();
+          renderOfflineDrawerList();
+          document.getElementById('sheetDrawerOverlay').classList.remove('hidden');
+        });
+        document.getElementById('activeSheetPillBtn')?.addEventListener('click', () => {
+          renderSheetsDrawerList();
           document.getElementById('sheetDrawerOverlay').classList.remove('hidden');
         });
         document.getElementById('closeSheetDrawerBtn')?.addEventListener('click', () => {
@@ -1662,12 +2108,94 @@
           document.getElementById('sheetDrawerOverlay').classList.add('hidden');
         });
 
-        document.getElementById('openDropboxModalBtn')?.addEventListener('click', () => {
+        // Drawer 3-Tab Switcher
+        document.querySelectorAll('.drawer-tab-btn').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const tab = btn.getAttribute('data-drawer-tab');
+            document.querySelectorAll('.drawer-tab-btn').forEach((b) => {
+              b.className = b === btn
+                ? 'drawer-tab-btn py-1.5 px-2 rounded-lg text-xs font-bold bg-sky-600 text-white transition'
+                : 'drawer-tab-btn py-1.5 px-2 rounded-lg text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-800 transition';
+            });
+            document.getElementById('drawerPanelSheets')?.classList.toggle('hidden', tab !== 'sheets');
+            document.getElementById('drawerPanelLinks')?.classList.toggle('hidden', tab !== 'links');
+            document.getElementById('drawerPanelOffline')?.classList.toggle('hidden', tab !== 'offline');
+          });
+        });
+
+        document.getElementById('sheetSearchInput')?.addEventListener('input', renderSheetsDrawerList);
+
+        const openDbx = () => {
+          updateDropboxConnectionUI();
           document.getElementById('dropboxModal').classList.remove('hidden');
-          loadDropboxFolder('', null);
+          loadDropboxFolder(state.dbxPath || '', state.dbxNamespaceId);
+        };
+        document.getElementById('openDropboxModalBtn')?.addEventListener('click', openDbx);
+        document.getElementById('emptyStateOpenDropboxBtn')?.addEventListener('click', openDbx);
+        document.getElementById('drawerOpenDropboxBtn')?.addEventListener('click', () => {
+          document.getElementById('sheetDrawerOverlay')?.classList.add('hidden');
+          openDbx();
         });
         document.getElementById('closeDropboxModalBtn')?.addEventListener('click', () => {
           document.getElementById('dropboxModal').classList.add('hidden');
+        });
+
+        // Dropbox OAuth Buttons
+        document.getElementById('toggleDbxSetupBtn')?.addEventListener('click', () => {
+          document.getElementById('dbxAuthSetupSection')?.classList.toggle('hidden');
+        });
+        document.getElementById('startDirectCodeAuthBtn')?.addEventListener('click', () => DropboxService.startDirectCodeFlow());
+        document.getElementById('completeDirectCodeBtn')?.addEventListener('click', () => {
+          const code = document.getElementById('directAuthCodeInput')?.value || '';
+          DropboxService.exchangeCodeForTokens(code, false);
+        });
+        document.getElementById('startRedirectAuthBtn')?.addEventListener('click', () => DropboxService.startRedirectFlow());
+        document.getElementById('copyRedirectUriBtn')?.addEventListener('click', () => {
+          const inp = document.getElementById('redirectUriReadonlyInput');
+          if (inp) {
+            inp.select();
+            document.execCommand('copy');
+            showToast('Redirect URI copied!', 'success');
+          }
+        });
+        document.getElementById('disconnectDbxBtn')?.addEventListener('click', () => DropboxService.disconnect());
+        document.getElementById('refreshDbxListBtn')?.addEventListener('click', () => loadDropboxFolder(state.dbxPath, state.dbxNamespaceId));
+
+        document.getElementById('modalTabDropboxBtn')?.addEventListener('click', () => {
+          document.getElementById('modalPanelDropbox')?.classList.remove('hidden');
+          document.getElementById('modalPanelOffline')?.classList.add('hidden');
+        });
+        document.getElementById('modalTabOfflineBtn')?.addEventListener('click', () => {
+          renderOfflineDrawerList();
+          document.getElementById('modalPanelDropbox')?.classList.add('hidden');
+          document.getElementById('modalPanelOffline')?.classList.remove('hidden');
+        });
+
+        // Local PDF Import
+        const triggerLocalPdf = () => document.getElementById('localPdfInput')?.click();
+        document.getElementById('openLocalPdfPickerBtn')?.addEventListener('click', triggerLocalPdf);
+        document.getElementById('drawerOpenDevicePdfsBtn')?.addEventListener('click', triggerLocalPdf);
+        document.getElementById('localPdfInput')?.addEventListener('change', async (e) => {
+          const files = Array.from(e.target.files || []);
+          for (const file of files) {
+            const buf = await file.arrayBuffer();
+            const docId = `local_${file.name}_${file.size}`;
+            const meta = {
+              docId,
+              name: file.name,
+              source: 'local',
+              size: file.size,
+              numPages: 1,
+              isOffline: true
+            };
+            state.memoryBlobs.set(docId, buf);
+            await ProDrawOfflineDB.saveDocument(meta, buf);
+            state.offlineSets.set(docId, meta);
+            state.projectFiles.set(docId, meta);
+            document.getElementById('dropboxModal')?.classList.add('hidden');
+            await openBlueprintDocument(docId, 1);
+          }
+          e.target.value = '';
         });
 
         document.getElementById('saveOfflineBtn')?.addEventListener('click', toggleActiveDocOffline);
@@ -1683,6 +2211,17 @@
           scheduleViewportDetailRender();
         });
         document.getElementById('zoomFitBtn')?.addEventListener('click', () => fitViewport('page'));
+
+        document.getElementById('prevPageBtn')?.addEventListener('click', async () => {
+          if (!state.activeDoc || state.activePage <= 1) return;
+          state.activePage -= 1;
+          await renderActivePageBase(true);
+        });
+        document.getElementById('nextPageBtn')?.addEventListener('click', async () => {
+          if (!state.activeDoc || state.activePage >= (state.activeDoc.numPages || 1)) return;
+          state.activePage += 1;
+          await renderActivePageBase(true);
+        });
 
         document.getElementById('toggleAddLinkBtn')?.addEventListener('click', () => {
           state.addLinkMode = !state.addLinkMode;
@@ -1715,11 +2254,37 @@
           applyStageTransform();
         });
 
+        document.getElementById('targetSearchInput')?.addEventListener('input', renderCalloutTargetCandidates);
         document.getElementById('closeCalloutModalBtn')?.addEventListener('click', closeCalloutModal);
         document.getElementById('cancelCalloutModalBtn')?.addEventListener('click', closeCalloutModal);
         document.getElementById('saveCalloutModalBtn')?.addEventListener('click', () => {
+          if (!state.activeDoc || !state.pendingRectNorm) {
+            closeCalloutModal();
+            return;
+          }
+          const targetDoc = state.projectFiles.get(state.selectedTargetKey) || state.activeDoc;
+          const targetPage = Math.max(1, Number(document.getElementById('calloutTargetPageInput')?.value) || 1);
+          const label = document.getElementById('calloutLabelInput')?.value.trim() || targetDoc.name.replace(/\.pdf$/i, '');
+
+          state.calloutLinks.push({
+            id: `link_${Date.now()}`,
+            sourceDocId: state.activeDoc.docId,
+            sourcePage: state.activePage,
+            targetDocId: targetDoc.docId,
+            targetDocName: targetDoc.name,
+            targetPage,
+            label,
+            color: state.selectedBadgeColor || 'blue',
+            x: state.pendingRectNorm.x,
+            y: state.pendingRectNorm.y,
+            w: state.pendingRectNorm.w,
+            h: state.pendingRectNorm.h
+          });
+          SafeStorage.setJSON('prodraw_callout_links', state.calloutLinks);
+          renderCalloutOverlays();
+          updateHeaderBar();
           closeCalloutModal();
-          showToast('Callout link saved!', 'success');
+          showToast(`Callout link to "${targetDoc.name}" saved!`, 'success');
         });
       }
 
@@ -1727,8 +2292,10 @@
       // 13. APP ENTRYPOINT & BOOTSTRAP
       // ---------------------------------------------------------------------
       async function initApp() {
+        state.calloutLinks = SafeStorage.getJSON('prodraw_callout_links', []);
         bindViewportInteractions();
         bindAllUIEvents();
+        updateDropboxConnectionUI();
 
         const offlineDocs = await ProDrawOfflineDB.getAllDocuments();
         offlineDocs.forEach((d) => {
@@ -1736,6 +2303,8 @@
           state.offlineSets.set(d.docId, d);
           state.projectFiles.set(d.docId, d);
         });
+
+        await DropboxService.handleOAuthCallbackOnBoot();
 
         await renderActivePageBase(true);
         updateHeaderBar();
@@ -1746,6 +2315,8 @@
             .then((entries) => {
               registerProjectSiblingFiles(entries, startFolder, null);
               enforceLockedRootOnProjectFiles();
+              renderSheetsDrawerList();
+              updateHeaderBar();
             })
             .catch(() => {});
         }
