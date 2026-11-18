@@ -269,17 +269,17 @@
         <span>Add Callout Link</span>
       </button>
 
-      <!-- Save Offline Button -->
-      <button id="saveOfflineBtn" type="button" title="Cache Active Blueprint PDF in IndexedDB for Offline Viewing"
+      <!-- Save Direct to Device Button -->
+      <button id="saveOfflineBtn" type="button" title="Download Active Blueprint PDF Directly to This Device &amp; Cache for Offline Linking"
         class="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 transition shrink-0">
         <svg class="w-3.5 h-3.5 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
           <polyline points="7 10 12 15 17 10"></polyline>
           <line x1="12" y1="15" x2="12" y2="3"></line>
         </svg>
-        <span id="saveOfflineLabel">Save Offline</span>
+        <span id="saveOfflineLabel">Save to Device</span>
         <span id="offlineBadgePill" class="hidden text-[10px] font-mono uppercase px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
-          Offline
+          On Device
         </span>
       </button>
 
@@ -417,7 +417,7 @@
               <polyline points="7 10 12 15 17 10"></polyline>
               <line x1="12" y1="15" x2="12" y2="3"></line>
             </svg>
-            <span id="drawerSaveFolderOfflineText">Save Entire Folder Offline</span>
+            <span id="drawerSaveFolderOfflineText">Download Folder PDFs to Device</span>
           </button>
         </div>
 
@@ -452,11 +452,24 @@
         </div>
       </div>
 
-      <!-- TAB 3: OFFLINE SAVED PDFS IN INDEXEDDB -->
+      <!-- TAB 3: DEVICE & OFFLINE SAVED PDFS -->
       <div id="drawerPanelOffline" class="hidden flex-1 flex flex-col min-h-0">
-        <div class="p-2.5 bg-slate-900 border-b border-slate-800 flex items-center justify-between shrink-0">
-          <span class="text-xs font-bold text-white">IndexedDB Offline Library</span>
-          <span id="drawerOfflineBytesText" class="text-[11px] font-mono text-emerald-400">0 files</span>
+        <div class="p-2.5 bg-slate-900 border-b border-slate-800 space-y-2 shrink-0">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold text-white">Device-Saved Blueprints</span>
+            <span id="drawerOfflineBytesText" class="text-[11px] font-mono text-emerald-400">0 files</span>
+          </div>
+          <button id="drawerOpenDevicePdfsBtn" type="button"
+            class="w-full py-1.5 px-3 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition">
+            <svg class="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+            </svg>
+            <span>Open PDF(s) Saved on Device</span>
+          </button>
+          <p class="text-[10px] text-slate-400 leading-snug">
+            Files are saved directly to your own device's storage &amp; Downloads folder—isolated per device so multiple users never interfere.
+          </p>
         </div>
         <div id="drawerOfflineList" class="flex-1 overflow-y-auto p-2 space-y-1.5">
           <!-- Populated dynamically -->
@@ -925,6 +938,37 @@
         return `dbx:${nsPart}${String(lowerPath || '').toLowerCase()}`;
       }
 
+      // Trigger a direct file download to the user's local device (Downloads / Files app)
+      function triggerDirectDeviceDownload(arrayBuffer, fileName, mimeType = 'application/pdf') {
+        if (!arrayBuffer) return;
+        const safeName = String(fileName || 'Blueprint.pdf').endsWith('.pdf') || mimeType !== 'application/pdf'
+          ? String(fileName || 'Blueprint.pdf')
+          : `${fileName}.pdf`;
+        const blob = new Blob([arrayBuffer], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = safeName;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+          a.remove();
+          URL.revokeObjectURL(url);
+        }, 1200);
+      }
+
+      // Request persistent device storage lock so mobile browsers don't auto-evict device cache
+      async function ensureDevicePersistentStorage() {
+        try {
+          if (navigator.storage && navigator.storage.persist) {
+            await navigator.storage.persist();
+          }
+        } catch {
+          // Ignore if unsupported
+        }
+      }
+
       function showToast(message, type = 'info', duration = 3200) {
         const stack = document.getElementById('toastStack');
         if (!stack) return;
@@ -947,21 +991,20 @@
       }
 
       // ---------------------------------------------------------------------
-      // 3. INDEXEDDB OFFLINE STORAGE (`ProDrawOfflineDB`)
+      // 3. NON-BLOCKING INDEXEDDB WRAPPER (`ProDrawOfflineDB`)
       // ---------------------------------------------------------------------
       const ProDrawOfflineDB = {
         dbName: 'ProDrawOfflineDB',
-        storeName: 'offlineSets',
+        storeName: 'savedSets',
         version: 2,
         dbPromise: null,
 
         open() {
           if (this.dbPromise) return this.dbPromise;
+          if (!window.indexedDB) {
+            return Promise.reject(new Error('IndexedDB is not available in this browser.'));
+          }
           this.dbPromise = new Promise((resolve, reject) => {
-            if (!window.indexedDB) {
-              reject(new Error('IndexedDB is not supported in this browser.'));
-              return;
-            }
             const req = window.indexedDB.open(this.dbName, this.version);
             req.onupgradeneeded = (e) => {
               const db = e.target.result;
@@ -3433,7 +3476,7 @@
       }
 
       // ---------------------------------------------------------------------
-      // 12. BATCH "SAVE ENTIRE FOLDER OFFLINE" (FOR 100% OFFLINE FIELD USE)
+      // 12. BATCH "SAVE ENTIRE FOLDER OFFLINE" (DIRECT TO DEVICE + LOCAL LINK CACHE)
       // ---------------------------------------------------------------------
       async function batchSaveCurrentFolderOffline(entriesList) {
         const pdfItems = entriesList.filter((item) => {
@@ -3443,7 +3486,7 @@
         });
 
         if (pdfItems.length === 0) {
-          showToast('No Dropbox PDF files found in the current folder to save offline.', 'warning');
+          showToast('No Dropbox PDF files found in the current folder to download to device.', 'warning');
           return;
         }
 
@@ -3451,6 +3494,8 @@
           showToast('Please connect to Dropbox first.', 'warning');
           return;
         }
+
+        await ensureDevicePersistentStorage();
 
         const busyEl = document.getElementById('pdfBusyIndicator');
         const busyText = document.getElementById('pdfBusyText');
@@ -3463,7 +3508,7 @@
           const nsId = item.dropboxNamespaceId ?? state.dbxNamespaceId ?? null;
           const docId = buildDropboxDocId(path, nsId);
 
-          busyText.textContent = `Saving ${i + 1} / ${pdfItems.length} sheets offline (${item.name})...`;
+          busyText.textContent = `Downloading ${i + 1} / ${pdfItems.length} to device (${item.name})...`;
 
           try {
             let buf = state.memoryPdfBuffers.get(docId) || state.offlineSetsMap.get(docId)?.pdfBuffer;
@@ -3472,6 +3517,10 @@
             }
             state.memoryPdfBuffers.set(docId, buf);
 
+            // 1. Trigger direct PDF file download to the user's device storage (Downloads / Files app)
+            triggerDirectDeviceDownload(buf, item.name, 'application/pdf');
+
+            // 2. Also cache locally on this device so cross-sheet callout links jump automatically
             const cleanName = item.name.replace(/\.pdf$/i, '');
             const record = {
               setId: docId,
@@ -3495,8 +3544,11 @@
             };
             await ProDrawOfflineDB.saveSet(record);
             savedCount++;
+
+            // Brief stagger so mobile/desktop browsers allow sequential file downloads
+            await new Promise((r) => setTimeout(r, 280));
           } catch (err) {
-            console.warn(`Failed caching ${item.name}:`, err);
+            console.warn(`Failed downloading ${item.name}:`, err);
           }
         }
 
@@ -3504,7 +3556,7 @@
         await refreshOfflineSetsCache();
         renderDropboxEntries();
         renderSheetDrawerList();
-        showToast(`Saved ${savedCount} / ${pdfItems.length} PDF drawings in folder for 100% offline use!`, 'success', 4200);
+        showToast(`Downloaded ${savedCount} / ${pdfItems.length} PDFs directly to your device!`, 'success', 4200);
       }
 
       // ---------------------------------------------------------------------
@@ -3542,7 +3594,7 @@
 
         const isOfflineSaved = state.offlineSetsMap.has(state.activeSet.setId);
         document.getElementById('offlineBadgePill').classList.toggle('hidden', !isOfflineSaved);
-        document.getElementById('saveOfflineLabel').textContent = isOfflineSaved ? 'Saved' : 'Save Offline';
+        document.getElementById('saveOfflineLabel').textContent = isOfflineSaved ? 'Download Again' : 'Save to Device';
       }
 
       function switchDrawerTab(tabName) {
@@ -3580,7 +3632,7 @@
         if (dbxProjectPdfs.length > 0) {
           saveFolderBtn.classList.remove('hidden');
           saveFolderBtn.classList.add('flex');
-          document.getElementById('drawerSaveFolderOfflineText').textContent = `Save All ${dbxProjectPdfs.length} Folder PDFs Offline`;
+          document.getElementById('drawerSaveFolderOfflineText').textContent = `Download All ${dbxProjectPdfs.length} Folder PDFs to Device`;
         } else {
           saveFolderBtn.classList.add('hidden');
           saveFolderBtn.classList.remove('flex');
@@ -3811,7 +3863,7 @@
 
         listEl.innerHTML = '';
         if (state.offlineSetsMap.size === 0) {
-          listEl.innerHTML = `<div class="p-6 text-center text-xs text-slate-400">No PDFs saved in IndexedDB yet. Tap <strong>Save Offline</strong> or <strong>Save Entire Folder Offline</strong>.</div>`;
+          listEl.innerHTML = `<div class="p-6 text-center text-xs text-slate-400">No PDFs saved on this device yet. Tap <strong>Save to Device</strong> or <strong>Download Folder PDFs to Device</strong>.</div>`;
           return;
         }
 
@@ -3821,11 +3873,20 @@
           row.innerHTML = `
             <div class="min-w-0 flex-1 cursor-pointer" data-open-offline>
               <div class="text-xs font-mono font-bold text-white truncate">${escapeHtml(rec.name)}</div>
-              <div class="text-[10px] font-mono text-emerald-400 mt-0.5">${formatBytes(rec.size)} • Offline Cached</div>
+              <div class="text-[10px] font-mono text-emerald-400 mt-0.5">${formatBytes(rec.size)} • Saved on This Device</div>
             </div>
-            <button type="button" data-del-offline class="px-2 py-1 rounded bg-rose-950/80 text-rose-300 text-[10px] font-bold border border-rose-800">
-              Remove
-            </button>
+            <div class="flex items-center gap-1 shrink-0">
+              ${
+                rec.pdfBuffer
+                  ? `<button type="button" data-dl-device title="Save Copy to Device Files / Downloads" class="px-2 py-1 rounded bg-sky-950/90 hover:bg-sky-900 text-sky-300 text-[10px] font-bold border border-sky-700">
+                      Save File
+                    </button>`
+                  : ''
+              }
+              <button type="button" data-del-offline class="px-2 py-1 rounded bg-rose-950/80 text-rose-300 text-[10px] font-bold border border-rose-800">
+                Remove
+              </button>
+            </div>
           `;
 
           row.querySelector('[data-open-offline]').addEventListener('click', async () => {
@@ -3842,6 +3903,12 @@
               });
               await activateDrawingSet(parsed, 0);
             }
+          });
+
+          row.querySelector('[data-dl-device]')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            triggerDirectDeviceDownload(rec.pdfBuffer, rec.name, 'application/pdf');
+            showToast(`Downloaded "${rec.name}" to your device's Downloads/Files folder.`, 'success');
           });
 
           row.querySelector('[data-del-offline]').addEventListener('click', async () => {
@@ -3872,6 +3939,33 @@
       async function saveActiveSetOffline() {
         if (!state.activeSet) return;
         try {
+          await ensureDevicePersistentStorage();
+
+          // 1. Trigger direct file download to the user's device (Downloads / Files app)
+          if (state.activeSet.pdfBuffer) {
+            triggerDirectDeviceDownload(state.activeSet.pdfBuffer, state.activeSet.name, 'application/pdf');
+          } else if (state.activeSet.source === 'vector') {
+            // For built-in vector sample sheet, export a crisp PNG image directly to the device
+            const baseCanvas = document.getElementById('pdfBaseCanvas');
+            const sheet = state.activeSet.sheets[state.activeSheetIndex] || state.activeSet.sheets[0];
+            if (baseCanvas && baseCanvas.toBlob) {
+              baseCanvas.toBlob((blob) => {
+                if (!blob) return;
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `${sheet.sheetNo}_${sheet.title.replace(/\s+/g, '_')}.png`;
+                document.body.appendChild(a);
+                a.click();
+                setTimeout(() => {
+                  a.remove();
+                  URL.revokeObjectURL(url);
+                }, 1000);
+              }, 'image/png');
+            }
+          }
+
+          // 2. Also store in this device's local database so cross-sheet callout links resolve offline automatically
           const record = {
             setId: state.activeSet.setId,
             name: state.activeSet.name,
@@ -3886,10 +3980,10 @@
           await ProDrawOfflineDB.saveSet(record);
           await refreshOfflineSetsCache();
           renderSheetDrawerList();
-          showToast(`Saved "${state.activeSet.name}" for offline viewing!`, 'success');
+          showToast(`Downloaded "${state.activeSet.name}" directly to your device & cached for offline links!`, 'success', 3600);
         } catch (err) {
-          console.error('Save offline error:', err);
-          showToast(`Offline save failed: ${err.message}`, 'error');
+          console.error('Save to device error:', err);
+          showToast(`Device save failed: ${err.message}`, 'error');
         }
       }
 
@@ -3901,8 +3995,8 @@
         if (state.offlineSetsMap.size === 0) {
           panel.innerHTML = `
             <div class="p-8 text-center text-xs text-slate-500 space-y-2">
-              <div class="font-bold text-slate-700">No Offline Drawing PDFs Saved Yet</div>
-              <p>Open any blueprint PDF from Dropbox or tap <strong>Save Folder Offline</strong> to cache an entire project set for offline field use.</p>
+              <div class="font-bold text-slate-700">No Offline Drawing PDFs Saved on This Device Yet</div>
+              <p>Tap <strong>Save to Device</strong> or <strong>Download All PDFs to Device</strong> to save drawings directly to your device's storage.</p>
             </div>
           `;
           return;
@@ -3915,10 +4009,18 @@
             <div class="min-w-0 flex-1">
               <div class="text-xs font-mono font-bold text-slate-900 truncate">${escapeHtml(rec.name)}</div>
               <div class="text-[11px] font-mono text-slate-500 mt-0.5">
-                ${formatBytes(rec.size)} • ${rec.dropboxPath || 'Offline Ready'}
+                ${formatBytes(rec.size)} • ${rec.dropboxPath || 'Saved on This Device'}
               </div>
             </div>
             <div class="flex items-center gap-1.5 shrink-0">
+              ${
+                rec.pdfBuffer
+                  ? `<button type="button" data-dl-device-set
+                      class="px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 text-xs font-bold">
+                      Download File
+                    </button>`
+                  : ''
+              }
               <button type="button" data-open-offline-set
                 class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold">
                 Open
@@ -3929,6 +4031,11 @@
               </button>
             </div>
           `;
+
+          row.querySelector('[data-dl-device-set]')?.addEventListener('click', () => {
+            triggerDirectDeviceDownload(rec.pdfBuffer, rec.name, 'application/pdf');
+            showToast(`Downloaded "${rec.name}" directly to your device.`, 'success');
+          });
 
           row.querySelector('[data-open-offline-set]').addEventListener('click', async () => {
             document.getElementById('dropboxModal').classList.add('hidden');
@@ -3949,7 +4056,7 @@
           row.querySelector('[data-del-offline-set]').addEventListener('click', async () => {
             await ProDrawOfflineDB.deleteSet(rec.setId);
             await refreshOfflineSetsCache();
-            showToast(`Removed "${rec.name}" from offline cache.`, 'info');
+            showToast(`Removed "${rec.name}" from device cache.`, 'info');
           });
 
           panel.appendChild(row);
@@ -4134,7 +4241,7 @@
         if (pdfEntries.length > 0) {
           saveFolderBtn.classList.remove('hidden');
           saveFolderBtn.classList.add('flex');
-          document.getElementById('modalSaveFolderOfflineText').textContent = `Save All ${pdfEntries.length} PDFs Offline`;
+          document.getElementById('modalSaveFolderOfflineText').textContent = `Download All ${pdfEntries.length} PDFs to Device`;
         } else {
           saveFolderBtn.classList.add('hidden');
           saveFolderBtn.classList.remove('flex');
@@ -4180,15 +4287,58 @@
                 <div class="min-w-0 flex-1">
                   <div class="text-xs font-mono font-bold text-slate-900 truncate">${escapeHtml(entry.name)}</div>
                   <div class="text-[11px] font-mono text-slate-500">
-                    ${formatBytes(entry.size)} ${isCached ? '• <span class="text-emerald-700 font-bold">Offline Ready</span>' : ''}
+                    ${formatBytes(entry.size)} ${isCached ? '• <span class="text-emerald-700 font-bold">On Device</span>' : ''}
                   </div>
                 </div>
               </div>
-              <button type="button" data-open-dbx-pdf
-                class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold shrink-0">
-                Open Drawing
-              </button>
+              <div class="flex items-center gap-1.5 shrink-0">
+                <button type="button" data-save-dbx-device title="Download PDF Directly to This Device"
+                  class="px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 text-xs font-bold">
+                  Save to Device
+                </button>
+                <button type="button" data-open-dbx-pdf
+                  class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold">
+                  Open Drawing
+                </button>
+              </div>
             `;
+
+            row.querySelector('[data-save-dbx-device]').addEventListener('click', async (e) => {
+              e.stopPropagation();
+              const btn = e.currentTarget;
+              btn.textContent = 'Saving...';
+              btn.disabled = true;
+              try {
+                await ensureDevicePersistentStorage();
+                const buf = await resolvePdfBufferForTarget({
+                  docId: setId,
+                  fileName: entry.name,
+                  dropboxPath: entry.path_lower,
+                  namespaceId: state.dbxNamespaceId
+                });
+                triggerDirectDeviceDownload(buf, entry.name, 'application/pdf');
+                const cleanName = entry.name.replace(/\.pdf$/i, '');
+                await ProDrawOfflineDB.saveSet({
+                  setId,
+                  name: entry.name,
+                  source: 'offline',
+                  dropboxPath: entry.path_lower,
+                  dropboxNamespaceId: state.dbxNamespaceId,
+                  savedAt: new Date().toISOString(),
+                  size: buf.byteLength,
+                  sheets: [{ sheetNo: cleanName, title: cleanName, discipline: 'PDF', scale: 'AS NOTED', drawnBy: '', pageNumber: 1 }],
+                  pdfBuffer: buf
+                });
+                await refreshOfflineSetsCache();
+                renderDropboxEntries();
+                showToast(`Downloaded "${entry.name}" directly to your device!`, 'success');
+              } catch (err) {
+                showToast(err.message || 'Failed to download PDF to device.', 'error');
+              } finally {
+                btn.textContent = 'Save to Device';
+                btn.disabled = false;
+              }
+            });
 
             row.querySelector('[data-open-dbx-pdf]').addEventListener('click', async () => {
               // Capture all sibling PDFs in this folder as the active Project Drawing Set!
@@ -4849,6 +4999,9 @@
 
         // Local PDF File Picker (Supports selecting multiple split PDFs at once!)
         document.getElementById('openLocalPdfPickerBtn').addEventListener('click', () => {
+          document.getElementById('localPdfInput').click();
+        });
+        document.getElementById('drawerOpenDevicePdfsBtn')?.addEventListener('click', () => {
           document.getElementById('localPdfInput').click();
         });
 
