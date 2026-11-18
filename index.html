@@ -607,30 +607,10 @@
           </div>
 
           <!-- Selected Target Summary Pill -->
-          <div class="p-2 rounded-xl bg-slate-100 border border-slate-300">
+          <div class="p-3 rounded-xl bg-slate-100 border border-slate-300">
             <div class="text-[10px] font-bold uppercase text-slate-500">Selected Target Destination</div>
-            <div id="selectedTargetSummaryText" class="text-xs font-mono font-bold text-slate-900 truncate mt-0.5">
+            <div id="selectedTargetSummaryText" class="text-xs font-mono font-bold text-slate-900 truncate mt-1">
               S2.0.pdf (Page 1)
-            </div>
-          </div>
-
-          <!-- Live Miniature Preview of Target Sheet -->
-          <div class="flex-1 flex flex-col">
-            <div class="flex items-center justify-between mb-1">
-              <span class="font-bold text-slate-800">Target Sheet Preview</span>
-              <span id="calloutPreviewTag" class="font-mono text-[10px] px-1.5 py-0.5 rounded bg-sky-100 text-sky-800 font-bold truncate max-w-[140px]">
-                Page 1
-              </span>
-            </div>
-            <div class="flex-1 min-h-[155px] rounded-xl bg-slate-100 border border-slate-300 flex flex-col items-center justify-center p-2 overflow-hidden relative">
-              <canvas id="calloutTargetPreviewCanvas" class="max-w-full max-h-40 shadow-sm bg-white rounded"></canvas>
-              <div id="remotePreviewPromptWrap" class="hidden absolute inset-0 bg-slate-900/75 backdrop-blur-xs flex flex-col items-center justify-center p-3 text-center text-white gap-2">
-                <span class="text-[11px] font-medium">Target PDF is on Dropbox (not yet cached in memory)</span>
-                <button id="loadRemotePreviewBtn" type="button"
-                  class="px-3 py-1.5 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs shadow">
-                  Load Live Preview from Dropbox
-                </button>
-              </div>
             </div>
           </div>
         </div>
@@ -1110,6 +1090,7 @@
         async removeFromDeviceFileSystem(record) {
           if (!record) return;
           const safeFile = this.sanitizeFileName(record.name, record.setId);
+          // 1. Remove from Origin Private File System (OPFS)
           try {
             if (navigator.storage && navigator.storage.getDirectory) {
               const opfsRoot = await navigator.storage.getDirectory();
@@ -1118,6 +1099,17 @@
             }
           } catch {
             // Ignore if not present in OPFS
+          }
+          // 2. Remove from Linked Native Device Folder if active
+          if (this.linkedDirHandle) {
+            try {
+              const perm = await this.linkedDirHandle.queryPermission({ mode: 'readwrite' });
+              if (perm === 'granted') {
+                await this.linkedDirHandle.removeEntry(safeFile);
+              }
+            } catch {
+              // Ignore if not present in linked folder
+            }
           }
         },
 
@@ -2944,90 +2936,17 @@
         });
       }
 
-      async function updateSelectedTargetSummaryAndPreview(forceRemoteDownload = false) {
+      async function updateSelectedTargetSummaryAndPreview() {
         const summaryEl = document.getElementById('selectedTargetSummaryText');
-        const previewTag = document.getElementById('calloutPreviewTag');
-        const previewCanvas = document.getElementById('calloutTargetPreviewCanvas');
-        const remotePrompt = document.getElementById('remotePreviewPromptWrap');
         const pageNum = Math.max(1, parseInt(document.getElementById('calloutTargetPageInput').value || '1', 10));
 
         const target = state.selectedTargetCandidate;
         if (!target) {
           summaryEl.textContent = 'No target selected';
-          remotePrompt.classList.add('hidden');
           return;
         }
 
         summaryEl.textContent = `${target.targetFileName} (Page ${pageNum})`;
-        previewTag.textContent = `${target.targetSheetNo || target.targetFileName} • Pg ${pageNum}`;
-
-        const ctx = previewCanvas.getContext('2d', { alpha: false });
-
-        // 1. Sample Vector Set preview
-        if (target.targetDocId === SAMPLE_SET_ID) {
-          remotePrompt.classList.add('hidden');
-          const sampleSet = createSampleVectorSet();
-          const sheet = sampleSet.sheets[Math.min(pageNum - 1, sampleSet.sheets.length - 1)] || sampleSet.sheets[0];
-          previewCanvas.width = 360;
-          previewCanvas.height = 240;
-          drawVectorBlueprintSheet(ctx, sheet, 360, 240);
-          return;
-        }
-
-        // 2. Check if PDF buffer is already in memory or IndexedDB
-        let buf =
-          state.memoryPdfBuffers.get(target.targetDocId) ||
-          state.offlineSetsMap.get(target.targetDocId)?.pdfBuffer ||
-          (state.activeSet && state.activeSet.setId === target.targetDocId ? state.activeSet.pdfBuffer : null);
-
-        if (!buf && forceRemoteDownload && target.targetDropboxPath) {
-          try {
-            const btn = document.getElementById('loadRemotePreviewBtn');
-            btn.textContent = 'Downloading preview...';
-            btn.disabled = true;
-            buf = await DropboxService.downloadFile(target.targetDropboxPath, target.targetNamespaceId);
-            state.memoryPdfBuffers.set(target.targetDocId, buf);
-            renderModalTargetList();
-          } catch (err) {
-            showToast(err.message || 'Preview download failed.', 'error');
-          } finally {
-            const btn = document.getElementById('loadRemotePreviewBtn');
-            btn.textContent = 'Load Live Preview from Dropbox';
-            btn.disabled = false;
-          }
-        }
-
-        if (!buf) {
-          // Clear preview canvas and show "Load Live Preview from Dropbox" overlay button
-          previewCanvas.width = 360;
-          previewCanvas.height = 240;
-          ctx.fillStyle = '#e2e8f0';
-          ctx.fillRect(0, 0, 360, 240);
-          remotePrompt.classList.toggle('hidden', !target.targetDropboxPath);
-          return;
-        }
-
-        remotePrompt.classList.add('hidden');
-        try {
-          const pdfjsLib = await ensurePdfJsLoaded();
-          let proxy = state.memoryPdfProxies.get(target.targetDocId);
-          if (!proxy) {
-            proxy = await pdfjsLib.getDocument({ data: buf.slice(0) }).promise;
-            state.memoryPdfProxies.set(target.targetDocId, proxy);
-          }
-          const clampedPage = Math.max(1, Math.min(pageNum, proxy.numPages));
-          const page = await proxy.getPage(clampedPage);
-          const baseVp = page.getViewport({ scale: 1.0 });
-          const scale = Math.min(360 / baseVp.width, 240 / baseVp.height);
-          const vp = page.getViewport({ scale });
-          previewCanvas.width = Math.floor(vp.width);
-          previewCanvas.height = Math.floor(vp.height);
-          ctx.fillStyle = '#ffffff';
-          ctx.fillRect(0, 0, previewCanvas.width, previewCanvas.height);
-          await page.render({ canvasContext: ctx, viewport: vp }).promise;
-        } catch {
-          // Ignore preview render error
-        }
       }
 
       // Inline Dropbox Mini-Browser inside the Callout Modal so users can pick a PDF from any subfolder
@@ -3662,6 +3581,27 @@
           return;
         }
 
+        // Check if all PDFs in this folder are already Available Offline -> Toggle OFF (remove from device)
+        const allAlreadyOffline = pdfItems.every((item) => {
+          const path = item.dropboxPath || item.path_lower;
+          const nsId = item.dropboxNamespaceId ?? state.dbxNamespaceId ?? null;
+          return state.offlineSetsMap.has(buildDropboxDocId(path, nsId));
+        });
+
+        if (allAlreadyOffline) {
+          for (const item of pdfItems) {
+            const path = item.dropboxPath || item.path_lower;
+            const nsId = item.dropboxNamespaceId ?? state.dbxNamespaceId ?? null;
+            const docId = buildDropboxDocId(path, nsId);
+            await ProDrawOfflineDB.deleteSet(docId);
+          }
+          await refreshOfflineSetsCache();
+          renderDropboxEntries();
+          renderSheetDrawerList();
+          showToast(`Removed ${pdfItems.length} folder PDF(s) from device offline storage.`, 'info', 3400);
+          return;
+        }
+
         await ensureDevicePersistentStorage();
 
         const busyEl = document.getElementById('pdfBusyIndicator');
@@ -3760,11 +3700,15 @@
         const pill = document.getElementById('offlineBadgePill');
         if (isOfflineSaved) {
           pill.classList.remove('hidden');
+          pill.textContent = 'ON';
           label.textContent = 'Available Offline';
-          btn.className = 'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-950/90 hover:bg-emerald-900 text-emerald-200 border border-emerald-600/60 transition shrink-0';
+          btn.title = 'Drawing is stored on this device. Tap to toggle off and remove from device.';
+          btn.className = 'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-950/90 hover:bg-rose-950/80 text-emerald-200 hover:text-rose-200 border border-emerald-600/60 hover:border-rose-500/60 transition shrink-0';
         } else {
-          pill.classList.add('hidden');
-          label.textContent = 'Make Available Offline';
+          pill.classList.remove('hidden');
+          pill.textContent = 'OFF';
+          label.textContent = 'Available Offline';
+          btn.title = 'Tap to make this blueprint Available Offline on this device';
           btn.className = 'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 transition shrink-0';
         }
       }
@@ -3795,16 +3739,16 @@
         const isOffline = state.offlineSetsMap.has(state.activeSet.setId);
         document.getElementById('drawerOfflineStatusTag').classList.toggle('hidden', !isOffline);
 
-        const q = (document.getElementById('sheetSearchInput')?.value || '').trim().toLowerCase();
-        listEl.innerHTML = '';
-
-        // Show "Make Folder Available Offline" button if projectFiles has Dropbox PDFs
+        // Show "Make Folder Available Offline" toggle button if projectFiles has Dropbox PDFs
         const dbxProjectPdfs = state.projectFiles.filter((pf) => pf.dropboxPath);
         const saveFolderBtn = document.getElementById('drawerSaveFolderOfflineBtn');
         if (dbxProjectPdfs.length > 0) {
+          const allFolderOffline = dbxProjectPdfs.every((pf) => state.offlineSetsMap.has(pf.docId));
           saveFolderBtn.classList.remove('hidden');
           saveFolderBtn.classList.add('flex');
-          document.getElementById('drawerSaveFolderOfflineText').textContent = `Make All ${dbxProjectPdfs.length} Folder PDFs Available Offline`;
+          document.getElementById('drawerSaveFolderOfflineText').textContent = allFolderOffline
+            ? `Remove All ${dbxProjectPdfs.length} Folder PDFs from Device`
+            : `Make All ${dbxProjectPdfs.length} Folder PDFs Available Offline`;
         } else {
           saveFolderBtn.classList.add('hidden');
           saveFolderBtn.classList.remove('flex');
@@ -3820,6 +3764,9 @@
             ? `${state.projectFiles.length} Project PDFs (${state.projectFolderPath || '/'})`
             : `${state.activeSet.sheets.length} Sheet(s)`;
 
+        const q = (document.getElementById('sheetSearchInput')?.value || '').trim().toLowerCase();
+        listEl.innerHTML = '';
+
         // SECTION A: Sibling Project PDFs in current Dropbox folder (`state.projectFiles`)
         if (state.projectFiles.length > 0) {
           const secHeader = document.createElement('div');
@@ -3833,7 +3780,7 @@
           state.projectFiles.forEach((pf) => {
             if (q && !pf.name.toLowerCase().includes(q)) return;
             const isCurrentDoc = state.activeSet.setId === pf.docId;
-            const isCached = state.offlineSetsMap.has(pf.docId) || state.memoryPdfBuffers.has(pf.docId);
+            const isOfflineOnDevice = state.offlineSetsMap.has(pf.docId);
             const linkCount = state.allLinks.filter(
               (l) =>
                 l.sourceDocId === pf.docId ||
@@ -3841,8 +3788,7 @@
                 normalizeSheetToken(l.sourceFileName) === normalizeSheetToken(pf.name)
             ).length;
 
-            const card = document.createElement('button');
-            card.type = 'button';
+            const card = document.createElement('div');
             card.className = `w-full text-left p-2.5 rounded-xl border flex items-center justify-between gap-2 transition ${
               isCurrentDoc
                 ? 'bg-sky-950/90 border-sky-500 text-white shadow-sm'
@@ -3850,19 +3796,15 @@
             }`;
 
             card.innerHTML = `
-              <div class="min-w-0 flex-1">
+              <div class="min-w-0 flex-1 cursor-pointer" data-open-pf>
                 <div class="flex items-center gap-1.5">
                   <span class="font-mono text-xs font-bold ${isCurrentDoc ? 'text-amber-300' : 'text-white'} truncate">
                     ${escapeHtml(pf.name)}
                   </span>
                 </div>
                 <div class="flex items-center gap-1.5 mt-1">
-                  <span class="px-1.5 py-0.2 rounded text-[9px] font-mono font-bold ${
-                    isCached
-                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                      : 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
-                  }">
-                    ${isCached ? 'OFFLINE' : 'DROPBOX'}
+                  <span class="text-[10px] font-mono ${isOfflineOnDevice ? 'text-emerald-400' : 'text-slate-400'}">
+                    ${isOfflineOnDevice ? 'Stored on Device' : 'Dropbox Online'}
                   </span>
                   ${
                     linkCount > 0
@@ -3873,15 +3815,66 @@
                   }
                 </div>
               </div>
-              <span class="text-xs font-bold ${isCurrentDoc ? 'text-amber-300' : 'text-slate-400'} shrink-0">
-                ${isCurrentDoc ? 'OPEN' : 'Open &rarr;'}
-              </span>
+              <div class="flex items-center gap-1.5 shrink-0">
+                <button type="button" data-toggle-pf-offline title="${isOfflineOnDevice ? 'Available Offline ON — Tap to remove from device' : 'Available Offline OFF — Tap to store on device'}"
+                  class="px-2 py-1 rounded-lg text-[10px] font-mono font-bold border transition ${
+                    isOfflineOnDevice
+                      ? 'bg-emerald-600/30 hover:bg-rose-900/60 text-emerald-300 hover:text-rose-200 border-emerald-500/50'
+                      : 'bg-slate-900 hover:bg-slate-700 text-slate-400 hover:text-white border-slate-700'
+                  }">
+                  ${isOfflineOnDevice ? '✓ Offline' : 'Offline'}
+                </button>
+              </div>
             `;
 
-            card.addEventListener('click', async () => {
+            card.querySelector('[data-open-pf]').addEventListener('click', async () => {
               document.getElementById('sheetDrawerOverlay').classList.add('hidden');
               if (isCurrentDoc) return;
               await openProjectFileItem(pf);
+            });
+
+            card.querySelector('[data-toggle-pf-offline]').addEventListener('click', async (e) => {
+              e.stopPropagation();
+              const btn = e.currentTarget;
+              if (state.offlineSetsMap.has(pf.docId)) {
+                await ProDrawOfflineDB.deleteSet(pf.docId);
+                await refreshOfflineSetsCache();
+                renderSheetDrawerList();
+                renderDropboxEntries();
+                showToast(`Removed "${pf.name}" from device offline storage.`, 'info');
+              } else {
+                btn.textContent = '...';
+                btn.disabled = true;
+                try {
+                  await ensureDevicePersistentStorage();
+                  const buf = await resolvePdfBufferForTarget({
+                    docId: pf.docId,
+                    fileName: pf.name,
+                    dropboxPath: pf.dropboxPath,
+                    namespaceId: pf.dropboxNamespaceId
+                  });
+                  const cleanName = pf.name.replace(/\.pdf$/i, '');
+                  await ProDrawOfflineDB.saveSet({
+                    setId: pf.docId,
+                    name: pf.name,
+                    source: 'offline',
+                    dropboxPath: pf.dropboxPath,
+                    dropboxNamespaceId: pf.dropboxNamespaceId,
+                    savedAt: new Date().toISOString(),
+                    size: buf.byteLength,
+                    sheets: [{ sheetNo: cleanName, title: cleanName, discipline: 'PDF', scale: 'AS NOTED', drawnBy: '', pageNumber: 1 }],
+                    pdfBuffer: buf
+                  });
+                  await refreshOfflineSetsCache();
+                  renderSheetDrawerList();
+                  renderDropboxEntries();
+                  showToast(`"${pf.name}" is now Available Offline on this device!`, 'success');
+                } catch (err) {
+                  showToast(err.message || 'Could not make file available offline.', 'error');
+                } finally {
+                  btn.disabled = false;
+                }
+              }
             });
 
             listEl.appendChild(card);
@@ -4129,6 +4122,26 @@
 
       async function saveActiveSetOffline() {
         if (!state.activeSet) return;
+        const setId = state.activeSet.setId;
+
+        // If already Available Offline, toggle OFF and remove from device storage
+        if (state.offlineSetsMap.has(setId)) {
+          try {
+            await ProDrawOfflineDB.deleteSet(setId);
+            if (state.activeSet.source === 'offline' && state.activeSet.dropboxPath) {
+              state.activeSet.source = 'dropbox';
+            }
+            await refreshOfflineSetsCache();
+            renderSheetDrawerList();
+            renderDropboxEntries();
+            showToast(`Removed "${state.activeSet.name}" from device offline storage.`, 'info', 3000);
+          } catch (err) {
+            showToast(`Could not remove offline copy: ${err.message}`, 'error');
+          }
+          return;
+        }
+
+        // Otherwise toggle ON and save to device storage
         try {
           await ensureDevicePersistentStorage();
 
@@ -4417,9 +4430,14 @@
 
         const pdfEntries = sorted.filter((e) => e['.tag'] === 'file');
         if (pdfEntries.length > 0) {
+          const allFolderOffline = pdfEntries.every((e) =>
+            state.offlineSetsMap.has(buildDropboxDocId(e.path_lower, state.dbxNamespaceId))
+          );
           saveFolderBtn.classList.remove('hidden');
           saveFolderBtn.classList.add('flex');
-          document.getElementById('modalSaveFolderOfflineText').textContent = `Make All ${pdfEntries.length} PDFs Available Offline`;
+          document.getElementById('modalSaveFolderOfflineText').textContent = allFolderOffline
+            ? `Remove All ${pdfEntries.length} PDFs from Device`
+            : `Make All ${pdfEntries.length} PDFs Available Offline`;
         } else {
           saveFolderBtn.classList.add('hidden');
           saveFolderBtn.classList.remove('flex');
@@ -4941,11 +4959,7 @@
         });
 
         document.getElementById('calloutTargetPageInput').addEventListener('input', () => {
-          updateSelectedTargetSummaryAndPreview(false).catch(() => {});
-        });
-
-        document.getElementById('loadRemotePreviewBtn').addEventListener('click', () => {
-          updateSelectedTargetSummaryAndPreview(true).catch(() => {});
+          updateSelectedTargetSummaryAndPreview().catch(() => {});
         });
 
         document.getElementById('toggleInlineDbxPickerBtn').addEventListener('click', () => {
