@@ -269,17 +269,17 @@
         <span>Add Callout Link</span>
       </button>
 
-      <!-- Save Direct to Device Button -->
-      <button id="saveOfflineBtn" type="button" title="Download Active Blueprint PDF Directly to This Device &amp; Cache for Offline Linking"
-        class="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 transition shrink-0">
-        <svg class="w-3.5 h-3.5 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+      <!-- Dropbox-Style "Make Available Offline" Button -->
+      <button id="saveOfflineBtn" type="button" title="Make Active Blueprint Available Offline on This Device"
+        class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 transition shrink-0">
+        <svg id="saveOfflineIcon" class="w-3.5 h-3.5 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
           <polyline points="7 10 12 15 17 10"></polyline>
           <line x1="12" y1="15" x2="12" y2="3"></line>
         </svg>
-        <span id="saveOfflineLabel">Save to Device</span>
+        <span id="saveOfflineLabel">Make Available Offline</span>
         <span id="offlineBadgePill" class="hidden text-[10px] font-mono uppercase px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
-          On Device
+          Available Offline
         </span>
       </button>
 
@@ -417,7 +417,7 @@
               <polyline points="7 10 12 15 17 10"></polyline>
               <line x1="12" y1="15" x2="12" y2="3"></line>
             </svg>
-            <span id="drawerSaveFolderOfflineText">Download Folder PDFs to Device</span>
+            <span id="drawerSaveFolderOfflineText">Make Folder Available Offline</span>
           </button>
         </div>
 
@@ -456,20 +456,29 @@
       <div id="drawerPanelOffline" class="hidden flex-1 flex flex-col min-h-0">
         <div class="p-2.5 bg-slate-900 border-b border-slate-800 space-y-2 shrink-0">
           <div class="flex items-center justify-between">
-            <span class="text-xs font-bold text-white">Device-Saved Blueprints</span>
+            <span class="text-xs font-bold text-white">Available Offline on Device</span>
             <span id="drawerOfflineBytesText" class="text-[11px] font-mono text-emerald-400">0 files</span>
           </div>
-          <button id="drawerOpenDevicePdfsBtn" type="button"
-            class="w-full py-1.5 px-3 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition">
-            <svg class="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-              <polyline points="14 2 14 8 20 8"></polyline>
-            </svg>
-            <span>Open PDF(s) Saved on Device</span>
-          </button>
-          <p class="text-[10px] text-slate-400 leading-snug">
-            Files are saved directly to your own device's storage &amp; Downloads folder—isolated per device so multiple users never interfere.
-          </p>
+          <div class="grid grid-cols-2 gap-1.5">
+            <button id="drawerLinkDeviceFolderBtn" type="button" title="Optional: Link a local device folder so offline files sync directly to a folder on disk"
+              class="py-1.5 px-2 rounded-lg bg-emerald-950/90 hover:bg-emerald-900 text-emerald-300 border border-emerald-700/70 text-[11px] font-bold flex items-center justify-center gap-1 transition">
+              <svg class="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+              </svg>
+              <span id="linkedFolderBtnLabel" class="truncate">Link Device Folder</span>
+            </button>
+            <button id="drawerOpenDevicePdfsBtn" type="button"
+              class="py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-300 border border-slate-700 text-[11px] font-bold flex items-center justify-center gap-1 transition">
+              <svg class="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+              </svg>
+              <span class="truncate">Import Local PDF</span>
+            </button>
+          </div>
+          <div id="deviceStorageLocationTag" class="px-2 py-1 rounded bg-slate-950 border border-slate-800 text-[10px] font-mono text-slate-400 truncate">
+            Storage: Device Private File System (OPFS + IndexedDB)
+          </div>
         </div>
         <div id="drawerOfflineList" class="flex-1 overflow-y-auto p-2 space-y-1.5">
           <!-- Populated dynamically -->
@@ -837,47 +846,50 @@
       'use strict';
 
       // ---------------------------------------------------------------------
-      // 1. CONSTANTS, NATURAL COLLATOR & SAFE STORAGE
+      // 1. SAFE STORAGE & CONSTANTS
       // ---------------------------------------------------------------------
-      const SAMPLE_SET_ID = 'sample_commercial_vector_set_v1';
-      const BASE_LOGICAL_SCALE = 1.5;          // Logical coordinate scale for PDFs (keeps normalized 0..1 callouts invariant)
-      const MAX_BASE_PIXELS = 16777216;        // 4096 x 4096 full-sheet base canvas pixel budget
-      const MAX_BASE_DIM = 4096;               // Maximum single edge for Layer 1 full-sheet base canvas
-      const MAX_PATCH_PIXELS = 16777216;       // 4096 x 4096 viewport detail patch pixel budget
-      const MAX_PATCH_DIM = 4096;              // Maximum single edge for Layer 2 viewport detail canvas
-      const STANDARD_CALLOUT_W = 0.018;        // Compact standard width (~20% of previous 0.085-0.095 width)
-      const STANDARD_CALLOUT_H = 0.026;        // Compact standard height (~50% of previous 0.052-0.058 height)
+      const SAMPLE_SET_ID = 'sample_commercial_set_v1';
       const DROPBOX_SCOPES = 'files.metadata.read files.content.read sharing.read account_info.read';
-      const naturalCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+      // High-DPI vector rendering constants
+      const BASE_LOGICAL_SCALE = 1.5;
+      const MAX_BASE_DIM = 4096;
+      const MAX_BASE_PIXELS = 16777216; // 4096 x 4096
+      const MAX_PATCH_DIM = 3840;
+      const MAX_PATCH_PIXELS = 12582912;
+
+      // Compact standard callout box size (~20% of old width, ~50% of old height)
+      const STANDARD_CALLOUT_W = 0.018;
+      const STANDARD_CALLOUT_H = 0.026;
 
       const SafeStorage = {
-        memory: {},
+        mem: {},
         get(key, fallback = '') {
-          if (Object.prototype.hasOwnProperty.call(this.memory, key)) {
-            return this.memory[key];
+          if (Object.prototype.hasOwnProperty.call(this.mem, key)) {
+            return this.mem[key];
           }
           try {
-            const val = window.localStorage.getItem(key);
-            if (val !== null) {
-              this.memory[key] = val;
-              return val;
+            const v = window.localStorage.getItem(key);
+            if (v !== null) {
+              this.mem[key] = v;
+              return v;
             }
           } catch {
-            // Ignore sandbox storage restrictions
+            // Ignore sandbox storage errors
           }
           return fallback;
         },
-        set(key, value) {
-          const str = String(value ?? '');
-          this.memory[key] = str;
+        set(key, val) {
+          const str = String(val);
+          this.mem[key] = str;
           try {
             window.localStorage.setItem(key, str);
           } catch {
-            // In-memory fallback active
+            // In-memory fallback already updated
           }
         },
         remove(key) {
-          delete this.memory[key];
+          delete this.mem[key];
           try {
             window.localStorage.removeItem(key);
           } catch {
@@ -903,8 +915,10 @@
       };
 
       // ---------------------------------------------------------------------
-      // 2. UTILITY FUNCTIONS & NON-BLOCKING TOAST NOTIFICATIONS
+      // 2. UTILITY & SHEET-CODE MATCHING HELPERS
       // ---------------------------------------------------------------------
+      const naturalCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
       function escapeHtml(str) {
         return String(str ?? '')
           .replace(/&/g, '&amp;')
@@ -920,30 +934,48 @@
       }
 
       function normalizeSheetToken(str) {
-        return String(str ?? '')
+        return String(str || '')
           .replace(/\.pdf$/i, '')
-          .toLowerCase()
-          .replace(/[\s\-._/\\()[\]]+/g, '');
+          .replace(/[^a-zA-Z0-9]/g, '')
+          .toUpperCase();
       }
 
-      function getParentFolderPath(path) {
-        if (!path) return '';
-        const cleaned = String(path).replace(/\/+$/, '');
-        const lastSlash = cleaned.lastIndexOf('/');
-        return lastSlash <= 0 ? '' : cleaned.slice(0, lastSlash);
+      function extractCandidateSheetCode(label) {
+        const raw = String(label || '').trim();
+        if (!raw) return '';
+        const parts = raw.split('/');
+        const candidate = (parts.length > 1 ? parts[parts.length - 1] : parts[0]).trim();
+        return normalizeSheetToken(candidate);
       }
 
-      function buildDropboxDocId(lowerPath, namespaceId = null) {
-        const nsPart = namespaceId ? `ns:${namespaceId}:` : '';
-        return `dbx:${nsPart}${String(lowerPath || '').toLowerCase()}`;
+      function buildDropboxDocId(dropboxPath, namespaceId = null) {
+        const nsPrefix = namespaceId ? `ns:${namespaceId}:` : '';
+        return `dbx:${nsPrefix}${String(dropboxPath || '').toLowerCase()}`;
       }
 
-      // Trigger a direct file download to the user's local device (Downloads / Files app)
+      function getParentFolderPath(filePath) {
+        if (!filePath) return '';
+        const idx = filePath.lastIndexOf('/');
+        return idx <= 0 ? '' : filePath.slice(0, idx);
+      }
+
+      async function ensureDevicePersistentStorage() {
+        try {
+          if (navigator.storage && navigator.storage.persist) {
+            const already = await navigator.storage.persisted();
+            if (!already) await navigator.storage.persist();
+          }
+        } catch {
+          // Ignore
+        }
+      }
+
       function triggerDirectDeviceDownload(arrayBuffer, fileName, mimeType = 'application/pdf') {
-        if (!arrayBuffer) return;
-        const safeName = String(fileName || 'Blueprint.pdf').endsWith('.pdf') || mimeType !== 'application/pdf'
-          ? String(fileName || 'Blueprint.pdf')
-          : `${fileName}.pdf`;
+        if (!arrayBuffer) return false;
+        let safeName = String(fileName || 'blueprint.pdf').trim();
+        if (mimeType === 'application/pdf' && !safeName.toLowerCase().endsWith('.pdf')) {
+          safeName += '.pdf';
+        }
         const blob = new Blob([arrayBuffer], { type: mimeType });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -955,17 +987,234 @@
         setTimeout(() => {
           a.remove();
           URL.revokeObjectURL(url);
-        }, 1200);
+        }, 2500);
+        return true;
       }
 
-      // Request persistent device storage lock so mobile browsers don't auto-evict device cache
-      async function ensureDevicePersistentStorage() {
-        try {
-          if (navigator.storage && navigator.storage.persist) {
-            await navigator.storage.persist();
+      // ---------------------------------------------------------------------
+      // 3. NON-BLOCKING DEVICE STORAGE ENGINE (`ProDrawOfflineDB` + OPFS + LINKED FOLDER)
+      // ---------------------------------------------------------------------
+      const ProDrawOfflineDB = {
+        dbName: 'ProDrawOfflineDB',
+        storeName: 'savedSets',
+        handleStoreName: 'deviceHandles',
+        version: 3,
+        dbPromise: null,
+        linkedDirHandle: null,
+
+        open() {
+          if (this.dbPromise) return this.dbPromise;
+          if (!window.indexedDB) {
+            return Promise.reject(new Error('IndexedDB is not available in this browser.'));
           }
-        } catch {
-          // Ignore if unsupported
+          this.dbPromise = new Promise((resolve, reject) => {
+            const req = window.indexedDB.open(this.dbName, this.version);
+            req.onupgradeneeded = (e) => {
+              const db = e.target.result;
+              if (!db.objectStoreNames.contains(this.storeName)) {
+                db.createObjectStore(this.storeName, { keyPath: 'setId' });
+              }
+              if (!db.objectStoreNames.contains(this.handleStoreName)) {
+                db.createObjectStore(this.handleStoreName);
+              }
+            };
+            req.onsuccess = (e) => resolve(e.target.result);
+            req.onerror = (e) => reject(e.target.error || new Error('IndexedDB open error'));
+          });
+          return this.dbPromise;
+        },
+
+        sanitizeFileName(name, setId = '') {
+          const base = String(name || setId || 'blueprint.pdf').replace(/[^a-zA-Z0-9._\- ()]/g, '_');
+          return base.toLowerCase().endsWith('.pdf') ? base : `${base}.pdf`;
+        },
+
+        // Write binary PDF to Origin Private File System (OPFS) & optional linked device directory
+        async writeToDeviceFileSystem(fileName, arrayBuffer) {
+          if (!arrayBuffer) return null;
+          const safeFile = this.sanitizeFileName(fileName);
+          let storedLocation = 'Device App Storage (IndexedDB)';
+
+          // 1. Write to Origin Private File System (OPFS) for direct high-speed file access on device
+          try {
+            if (navigator.storage && navigator.storage.getDirectory) {
+              const opfsRoot = await navigator.storage.getDirectory();
+              const dir = await opfsRoot.getDirectoryHandle('blueprints', { create: true });
+              const fileHandle = await dir.getFileHandle(safeFile, { create: true });
+              if (fileHandle.createWritable) {
+                const writable = await fileHandle.createWritable();
+                await writable.write(arrayBuffer);
+                await writable.close();
+                storedLocation = `Device OPFS (/blueprints/${safeFile})`;
+              }
+            }
+          } catch {
+            // Fallback to IndexedDB binary storage
+          }
+
+          // 2. If user linked a native device directory, also write directly to that folder on disk
+          if (this.linkedDirHandle) {
+            try {
+              const perm = await this.linkedDirHandle.queryPermission({ mode: 'readwrite' });
+              if (perm === 'granted') {
+                const fh = await this.linkedDirHandle.getFileHandle(safeFile, { create: true });
+                const writable = await fh.createWritable();
+                await writable.write(arrayBuffer);
+                await writable.close();
+                storedLocation = `Device Folder (${this.linkedDirHandle.name}/${safeFile})`;
+              }
+            } catch {
+              // Ignore if folder permission not active
+            }
+          }
+
+          return storedLocation;
+        },
+
+        // Read binary PDF directly from its stored device location (Linked Folder -> OPFS -> IndexedDB)
+        async readFromDeviceFileSystem(record) {
+          if (!record) return null;
+          const safeFile = this.sanitizeFileName(record.name, record.setId);
+
+          // 1. Try reading directly from Linked Native Device Folder if active
+          if (this.linkedDirHandle) {
+            try {
+              const perm = await this.linkedDirHandle.queryPermission({ mode: 'read' });
+              if (perm === 'granted') {
+                const fh = await this.linkedDirHandle.getFileHandle(safeFile);
+                const file = await fh.getFile();
+                return await file.arrayBuffer();
+              }
+            } catch {
+              // Fall through to OPFS
+            }
+          }
+
+          // 2. Try reading directly from Origin Private File System (OPFS)
+          try {
+            if (navigator.storage && navigator.storage.getDirectory) {
+              const opfsRoot = await navigator.storage.getDirectory();
+              const dir = await opfsRoot.getDirectoryHandle('blueprints', { create: false });
+              const fh = await dir.getFileHandle(safeFile, { create: false });
+              const file = await fh.getFile();
+              return await file.arrayBuffer();
+            }
+          } catch {
+            // Fall through to IndexedDB buffer
+          }
+
+          // 3. Return IndexedDB stored ArrayBuffer
+          return record.pdfBuffer || null;
+        },
+
+        async removeFromDeviceFileSystem(record) {
+          if (!record) return;
+          const safeFile = this.sanitizeFileName(record.name, record.setId);
+          try {
+            if (navigator.storage && navigator.storage.getDirectory) {
+              const opfsRoot = await navigator.storage.getDirectory();
+              const dir = await opfsRoot.getDirectoryHandle('blueprints', { create: false });
+              await dir.removeEntry(safeFile);
+            }
+          } catch {
+            // Ignore if not present in OPFS
+          }
+        },
+
+        async linkNativeDeviceFolder() {
+          if (!window.showDirectoryPicker) {
+            showToast('Direct Device Storage (OPFS + IndexedDB) is active! Custom OS folder linking requires desktop Chrome/Edge.', 'info', 4200);
+            return null;
+          }
+          try {
+            const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+            this.linkedDirHandle = dirHandle;
+            const db = await this.open();
+            await new Promise((resolve) => {
+              const tx = db.transaction(this.handleStoreName, 'readwrite');
+              tx.objectStore(this.handleStoreName).put(dirHandle, 'linkedDir');
+              tx.oncomplete = () => resolve();
+              tx.onerror = () => resolve();
+            });
+            updateStorageLocationBanner();
+            showToast(`Linked device folder "${dirHandle.name}"! Offline blueprints will read & write there directly.`, 'success', 4000);
+            return dirHandle;
+          } catch (err) {
+            if (err?.name !== 'AbortError') {
+              showToast(`Could not link folder: ${err.message}`, 'warning');
+            }
+            return null;
+          }
+        },
+
+        async restoreLinkedFolderHandle() {
+          try {
+            const db = await this.open();
+            return await new Promise((resolve) => {
+              const tx = db.transaction(this.handleStoreName, 'readonly');
+              const req = tx.objectStore(this.handleStoreName).get('linkedDir');
+              req.onsuccess = () => {
+                if (req.result) this.linkedDirHandle = req.result;
+                updateStorageLocationBanner();
+                resolve(req.result || null);
+              };
+              req.onerror = () => resolve(null);
+            });
+          } catch {
+            return null;
+          }
+        },
+
+        async saveSet(record) {
+          const storedLoc = await this.writeToDeviceFileSystem(record.name, record.pdfBuffer);
+          const enrichedRecord = {
+            ...record,
+            storedLocation: storedLoc || record.storedLocation || 'Device App Storage'
+          };
+          const db = await this.open();
+          return new Promise((resolve, reject) => {
+            const tx = db.transaction(this.storeName, 'readwrite');
+            tx.objectStore(this.storeName).put(enrichedRecord);
+            tx.oncomplete = () => resolve(enrichedRecord);
+            tx.onerror = (e) => reject(e.target.error);
+          });
+        },
+
+        async getAllSets() {
+          const db = await this.open();
+          return new Promise((resolve, reject) => {
+            const tx = db.transaction(this.storeName, 'readonly');
+            const req = tx.objectStore(this.storeName).getAll();
+            req.onsuccess = () => resolve(req.result || []);
+            req.onerror = (e) => reject(e.target.error);
+          });
+        },
+
+        async deleteSet(setId) {
+          const rec = state.offlineSetsMap.get(setId);
+          if (rec) await this.removeFromDeviceFileSystem(rec);
+          const db = await this.open();
+          return new Promise((resolve, reject) => {
+            const tx = db.transaction(this.storeName, 'readwrite');
+            tx.objectStore(this.storeName).delete(setId);
+            tx.oncomplete = () => resolve();
+            tx.onerror = (e) => reject(e.target.error);
+          });
+        }
+      };
+
+      function updateStorageLocationBanner() {
+        const tag = document.getElementById('deviceStorageLocationTag');
+        const btnLabel = document.getElementById('linkedFolderBtnLabel');
+        if (!tag) return;
+        if (ProDrawOfflineDB.linkedDirHandle) {
+          tag.textContent = `Stored Location: Device Folder "${ProDrawOfflineDB.linkedDirHandle.name}" + OPFS`;
+          tag.className = 'px-2 py-1 rounded bg-emerald-950/80 border border-emerald-700/70 text-[10px] font-mono text-emerald-300 truncate';
+          if (btnLabel) btnLabel.textContent = `Folder: ${ProDrawOfflineDB.linkedDirHandle.name}`;
+        } else {
+          tag.textContent = 'Stored Location: Device Private File System (OPFS + IndexedDB)';
+          tag.className = 'px-2 py-1 rounded bg-slate-950 border border-slate-800 text-[10px] font-mono text-slate-400 truncate';
+          if (btnLabel) btnLabel.textContent = 'Link Device Folder';
         }
       }
 
@@ -989,65 +1238,6 @@
           setTimeout(() => el.remove(), 220);
         }, duration);
       }
-
-      // ---------------------------------------------------------------------
-      // 3. NON-BLOCKING INDEXEDDB WRAPPER (`ProDrawOfflineDB`)
-      // ---------------------------------------------------------------------
-      const ProDrawOfflineDB = {
-        dbName: 'ProDrawOfflineDB',
-        storeName: 'savedSets',
-        version: 2,
-        dbPromise: null,
-
-        open() {
-          if (this.dbPromise) return this.dbPromise;
-          if (!window.indexedDB) {
-            return Promise.reject(new Error('IndexedDB is not available in this browser.'));
-          }
-          this.dbPromise = new Promise((resolve, reject) => {
-            const req = window.indexedDB.open(this.dbName, this.version);
-            req.onupgradeneeded = (e) => {
-              const db = e.target.result;
-              if (!db.objectStoreNames.contains(this.storeName)) {
-                db.createObjectStore(this.storeName, { keyPath: 'setId' });
-              }
-            };
-            req.onsuccess = (e) => resolve(e.target.result);
-            req.onerror = (e) => reject(e.target.error || new Error('IndexedDB open error'));
-          });
-          return this.dbPromise;
-        },
-
-        async saveSet(record) {
-          const db = await this.open();
-          return new Promise((resolve, reject) => {
-            const tx = db.transaction(this.storeName, 'readwrite');
-            tx.objectStore(this.storeName).put(record);
-            tx.oncomplete = () => resolve();
-            tx.onerror = (e) => reject(e.target.error);
-          });
-        },
-
-        async getAllSets() {
-          const db = await this.open();
-          return new Promise((resolve, reject) => {
-            const tx = db.transaction(this.storeName, 'readonly');
-            const req = tx.objectStore(this.storeName).getAll();
-            req.onsuccess = () => resolve(req.result || []);
-            req.onerror = (e) => reject(e.target.error);
-          });
-        },
-
-        async deleteSet(setId) {
-          const db = await this.open();
-          return new Promise((resolve, reject) => {
-            const tx = db.transaction(this.storeName, 'readwrite');
-            tx.objectStore(this.storeName).delete(setId);
-            tx.oncomplete = () => resolve();
-            tx.onerror = (e) => reject(e.target.error);
-          });
-        }
-      };
 
       // ---------------------------------------------------------------------
       // 4. LAZY PDF.JS LOADER (NON-BLOCKING ON DEMAND)
@@ -2377,39 +2567,42 @@
 
       // Resolve an ArrayBuffer for a target PDF by checking:
       // 1) In-memory buffer cache
-      // 2) IndexedDB Offline cache (by docId, dropboxPath, or normalized filename)
+      // 2) Device stored location (Linked Folder / OPFS / IndexedDB) by docId, dropboxPath, or normalized filename
       // 3) Live Dropbox download
       async function resolvePdfBufferForTarget({ docId, fileName, dropboxPath, namespaceId }) {
         if (docId && state.memoryPdfBuffers.has(docId)) {
           return state.memoryPdfBuffers.get(docId);
         }
 
-        // Check IndexedDB by exact docId
+        // Check Device Storage (OPFS / Linked Folder / IndexedDB) by exact docId
         if (docId && state.offlineSetsMap.has(docId)) {
           const rec = state.offlineSetsMap.get(docId);
-          if (rec?.pdfBuffer) {
-            state.memoryPdfBuffers.set(docId, rec.pdfBuffer);
-            return rec.pdfBuffer;
+          const storedBuf = await ProDrawOfflineDB.readFromDeviceFileSystem(rec);
+          if (storedBuf) {
+            state.memoryPdfBuffers.set(docId, storedBuf);
+            return storedBuf;
           }
         }
 
-        // Check IndexedDB by matching dropboxPath or normalized filename
+        // Check Device Storage by matching dropboxPath or normalized filename
         const normTargetName = normalizeSheetToken(fileName);
         for (const [, rec] of state.offlineSetsMap.entries()) {
-          if (!rec.pdfBuffer) continue;
           if (
             (dropboxPath && rec.dropboxPath && rec.dropboxPath.toLowerCase() === dropboxPath.toLowerCase()) ||
             (normTargetName && normalizeSheetToken(rec.name) === normTargetName)
           ) {
-            if (docId) state.memoryPdfBuffers.set(docId, rec.pdfBuffer);
-            return rec.pdfBuffer;
+            const storedBuf = await ProDrawOfflineDB.readFromDeviceFileSystem(rec);
+            if (storedBuf) {
+              if (docId) state.memoryPdfBuffers.set(docId, storedBuf);
+              return storedBuf;
+            }
           }
         }
 
         // Otherwise download from Dropbox
         if (dropboxPath) {
           if (!DropboxService.isConnected()) {
-            throw new Error(`Target "${fileName || dropboxPath}" is on Dropbox. Please connect Dropbox or cache the folder offline.`);
+            throw new Error(`Target "${fileName || dropboxPath}" is on Dropbox. Please connect Dropbox or make the folder Available Offline.`);
           }
           const buf = await DropboxService.downloadFile(dropboxPath, namespaceId || null);
           if (docId) state.memoryPdfBuffers.set(docId, buf);
@@ -2558,134 +2751,108 @@
       }
 
       // ---------------------------------------------------------------------
-      // 9. CREATE / EDIT CALLOUT LINK MODAL (WITH SMART AUTO-MATCH & INLINE DROPBOX PICKER)
+      // 9. CREATE / EDIT CROSS-FILE CALLOUT MODAL & SMART SHEET AUTO-MATCH
       // ---------------------------------------------------------------------
-      async function openCalloutModal(boxRect, existingLink = null) {
+      async function openCalloutModal(boxNorm, existingLink = null) {
         if (!state.activeSet) return;
-        state.pendingBox = boxRect;
+        state.pendingBox = boxNorm;
         state.editingLinkId = existingLink ? existingLink.id : null;
 
+        const currentSheet = state.activeSet.sheets[state.activeSheetIndex] || state.activeSet.sheets[0];
         document.getElementById('calloutModalTitle').textContent = existingLink
           ? 'Edit Cross-PDF / Sheet Callout Link'
           : 'Create Cross-PDF / Sheet Callout Link';
-
-        const currentSheet = state.activeSet.sheets[state.activeSheetIndex] || state.activeSet.sheets[0];
-        document.getElementById('calloutModalSourceSubtitle').textContent = `Source: ${state.activeSet.name} (Page ${
+        document.getElementById('calloutModalSourceSubtitle').textContent = `Source: ${state.activeSet.name} (${currentSheet.sheetNo} • Page ${
           state.activeSheetIndex + 1
-        } • ${currentSheet.sheetNo})`;
+        })`;
 
+        document.getElementById('deleteCalloutBtn').classList.toggle('hidden', !existingLink);
+        document.getElementById('inlineDbxPickerPanel').classList.add('hidden');
         document.getElementById('targetSearchInput').value = '';
         document.getElementById('smartMatchBanner').classList.add('hidden');
-        document.getElementById('inlineDbxPickerPanel').classList.add('hidden');
 
-        // Build selectable target list
         const allTargets = getAllSelectableTargets();
 
-        // Pick default initial target (prefer a sibling PDF or sheet different from current)
-        let initialTarget = null;
         if (existingLink) {
-          initialTarget =
+          document.getElementById('calloutLabelInput').value = existingLink.label || '';
+          document.getElementById('calloutDetailTitleInput').value = existingLink.detailTitle || '';
+          document.getElementById('calloutTargetPageInput').value = String(Number(existingLink.targetPageIndex ?? 0) + 1);
+          selectBadgeColorChoice(existingLink.color || 'blue');
+
+          const matched =
+            allTargets.find((t) => t.targetDocId === existingLink.targetDocId && t.targetType === existingLink.targetType) ||
             allTargets.find(
               (t) =>
-                (existingLink.targetType === 'pdf_file' &&
-                  t.targetType === 'pdf_file' &&
-                  (t.targetDocId === existingLink.targetDocId ||
-                    (t.targetDropboxPath &&
-                      existingLink.targetDropboxPath &&
-                      t.targetDropboxPath.toLowerCase() === existingLink.targetDropboxPath.toLowerCase()))) ||
-                (existingLink.targetType === 'page' &&
-                  t.targetType === 'page' &&
-                  t.targetDocId === existingLink.targetDocId &&
-                  t.targetPageIndex === existingLink.targetPageIndex)
-            ) || null;
+                existingLink.targetDropboxPath &&
+                t.targetDropboxPath &&
+                t.targetDropboxPath.toLowerCase() === existingLink.targetDropboxPath.toLowerCase()
+            ) ||
+            allTargets.find((t) => normalizeSheetToken(t.targetFileName) === normalizeSheetToken(existingLink.targetFileName));
 
-          // If existingLink points to a Dropbox PDF not yet in allTargets, synthesize it
-          if (!initialTarget && existingLink.targetDropboxPath) {
-            initialTarget = {
-              key: `file:${existingLink.targetDocId}`,
-              targetType: 'pdf_file',
+          if (matched) {
+            state.selectedTargetCandidate = matched;
+          } else {
+            state.selectedTargetCandidate = {
+              key: `custom:${existingLink.targetDocId}`,
+              targetType: existingLink.targetType || 'pdf_file',
               targetDocId: existingLink.targetDocId,
-              targetFileName: existingLink.targetFileName,
-              targetDropboxPath: existingLink.targetDropboxPath,
+              targetFileName: existingLink.targetFileName || existingLink.targetSheetNo || 'Linked Drawing.pdf',
+              targetSheetNo: existingLink.targetSheetNo || existingLink.targetFileName,
+              targetDropboxPath: existingLink.targetDropboxPath || null,
               targetNamespaceId: existingLink.targetNamespaceId || null,
-              targetPageIndex: existingLink.targetPageIndex || 0,
-              displayTitle: existingLink.targetFileName,
-              subtitle: getParentFolderPath(existingLink.targetDropboxPath) || '/',
-              badgeText: 'DROPBOX',
+              targetPageIndex: Number(existingLink.targetPageIndex ?? 0),
+              displayTitle: existingLink.targetFileName || existingLink.targetSheetNo || 'Linked Drawing.pdf',
+              subtitle: existingLink.targetDropboxPath || 'Saved Target',
+              badgeText: 'LINKED',
               badgeType: 'dropbox'
             };
           }
+        } else {
+          const defaultTarget = allTargets.find((t) => !t.isCurrentDoc) || allTargets[0] || null;
+          state.selectedTargetCandidate = defaultTarget;
+          const defaultCode = defaultTarget
+            ? (defaultTarget.targetSheetNo || defaultTarget.targetFileName).replace(/\.pdf$/i, '')
+            : 'S2.0';
+          document.getElementById('calloutLabelInput').value = `1/${defaultCode}`;
+          document.getElementById('calloutDetailTitleInput').value = '';
+          document.getElementById('calloutTargetPageInput').value = defaultTarget
+            ? String((defaultTarget.targetPageIndex || 0) + 1)
+            : '1';
+          selectBadgeColorChoice('blue');
         }
-
-        if (!initialTarget) {
-          initialTarget = allTargets.find((t) => !t.isCurrentDoc) || allTargets[0] || null;
-        }
-
-        state.selectedTargetCandidate = initialTarget;
-
-        document.getElementById('calloutTargetPageInput').value = existingLink
-          ? String(Number(existingLink.targetPageIndex ?? 0) + 1)
-          : initialTarget && initialTarget.targetType === 'page'
-          ? String(initialTarget.targetPageIndex + 1)
-          : '1';
-
-        const defaultLabel = existingLink
-          ? existingLink.label
-          : initialTarget
-          ? initialTarget.targetSheetNo || initialTarget.targetFileName.replace(/\.pdf$/i, '')
-          : 'S2.0';
-
-        document.getElementById('calloutLabelInput').value = defaultLabel;
-        document.getElementById('calloutDetailTitleInput').value = existingLink ? existingLink.detailTitle || '' : '';
-
-        selectBadgeColorChoice(existingLink ? existingLink.color || 'blue' : 'blue');
-
-        document.getElementById('deleteCalloutBtn').classList.toggle('hidden', !existingLink);
-        document.getElementById('calloutModal').classList.remove('hidden');
 
         renderModalTargetList();
         await updateSelectedTargetSummaryAndPreview();
+        document.getElementById('calloutModal').classList.remove('hidden');
+        setTimeout(() => document.getElementById('calloutLabelInput').focus(), 40);
       }
 
-      // Smart Auto-Match when user types a callout label like "3/S2.0" or "S2.0" or "SIM A3.1"
       function runSmartLabelAutoMatch(rawLabel) {
-        if (!rawLabel || !rawLabel.trim()) {
-          document.getElementById('smartMatchBanner').classList.add('hidden');
-          return;
-        }
-        // Extract sheet portion: if there's a slash (e.g. "3/S2.0"), take part after '/'; otherwise strip common prefixes like "SIM " or "TYP "
-        let sheetToken = rawLabel.trim();
-        if (sheetToken.includes('/')) {
-          sheetToken = sheetToken.split('/').pop().trim();
-        } else {
-          sheetToken = sheetToken.replace(/^(sim|typ|det|sec)\.?\s+/i, '').trim();
-        }
-
-        const normQuery = normalizeSheetToken(sheetToken);
-        if (normQuery.length < 2) {
-          document.getElementById('smartMatchBanner').classList.add('hidden');
+        const code = extractCandidateSheetCode(rawLabel);
+        const banner = document.getElementById('smartMatchBanner');
+        const bannerText = document.getElementById('smartMatchBannerText');
+        if (!code || code.length < 2) {
+          banner.classList.add('hidden');
           return;
         }
 
         const allTargets = getAllSelectableTargets();
-        // Look for exact normalized match first, then prefix/substring match
-        let match =
-          allTargets.find((t) => normalizeSheetToken(t.targetSheetNo || t.targetFileName) === normQuery) ||
-          allTargets.find((t) => normalizeSheetToken(t.targetSheetNo || t.targetFileName).startsWith(normQuery)) ||
-          allTargets.find((t) => normalizeSheetToken(t.targetSheetNo || t.targetFileName).includes(normQuery));
+        const exactMatch =
+          allTargets.find((t) => normalizeSheetToken(t.targetFileName) === code) ||
+          allTargets.find((t) => normalizeSheetToken(t.targetSheetNo) === code) ||
+          allTargets.find((t) => normalizeSheetToken(t.targetFileName).includes(code));
 
-        if (match) {
-          state.selectedTargetCandidate = match;
-          if (match.targetType === 'page') {
-            document.getElementById('calloutTargetPageInput').value = String(match.targetPageIndex + 1);
+        if (exactMatch) {
+          state.selectedTargetCandidate = exactMatch;
+          if (exactMatch.targetType === 'page') {
+            document.getElementById('calloutTargetPageInput').value = String(exactMatch.targetPageIndex + 1);
           }
-          const banner = document.getElementById('smartMatchBanner');
-          document.getElementById('smartMatchBannerText').textContent = `Auto-matched target: ${match.displayTitle}`;
+          bannerText.textContent = `Auto-matched sheet: ${exactMatch.displayTitle}`;
           banner.classList.remove('hidden');
           renderModalTargetList();
           updateSelectedTargetSummaryAndPreview().catch(() => {});
         } else {
-          document.getElementById('smartMatchBanner').classList.add('hidden');
+          banner.classList.add('hidden');
         }
       }
 
@@ -3476,7 +3643,7 @@
       }
 
       // ---------------------------------------------------------------------
-      // 12. BATCH "SAVE ENTIRE FOLDER OFFLINE" (DIRECT TO DEVICE + LOCAL LINK CACHE)
+      // 12. BATCH "MAKE ENTIRE FOLDER AVAILABLE OFFLINE" (STORED ON DEVICE & ACCESSIBLE IN-APP)
       // ---------------------------------------------------------------------
       async function batchSaveCurrentFolderOffline(entriesList) {
         const pdfItems = entriesList.filter((item) => {
@@ -3486,7 +3653,7 @@
         });
 
         if (pdfItems.length === 0) {
-          showToast('No Dropbox PDF files found in the current folder to download to device.', 'warning');
+          showToast('No Dropbox PDF files found in the current folder.', 'warning');
           return;
         }
 
@@ -3508,19 +3675,18 @@
           const nsId = item.dropboxNamespaceId ?? state.dbxNamespaceId ?? null;
           const docId = buildDropboxDocId(path, nsId);
 
-          busyText.textContent = `Downloading ${i + 1} / ${pdfItems.length} to device (${item.name})...`;
+          busyText.textContent = `Making Available Offline ${i + 1} / ${pdfItems.length} (${item.name})...`;
 
           try {
-            let buf = state.memoryPdfBuffers.get(docId) || state.offlineSetsMap.get(docId)?.pdfBuffer;
+            let buf = state.memoryPdfBuffers.get(docId);
+            if (!buf && state.offlineSetsMap.has(docId)) {
+              buf = await ProDrawOfflineDB.readFromDeviceFileSystem(state.offlineSetsMap.get(docId));
+            }
             if (!buf) {
               buf = await DropboxService.downloadFile(path, nsId);
             }
             state.memoryPdfBuffers.set(docId, buf);
 
-            // 1. Trigger direct PDF file download to the user's device storage (Downloads / Files app)
-            triggerDirectDeviceDownload(buf, item.name, 'application/pdf');
-
-            // 2. Also cache locally on this device so cross-sheet callout links jump automatically
             const cleanName = item.name.replace(/\.pdf$/i, '');
             const record = {
               setId: docId,
@@ -3544,11 +3710,8 @@
             };
             await ProDrawOfflineDB.saveSet(record);
             savedCount++;
-
-            // Brief stagger so mobile/desktop browsers allow sequential file downloads
-            await new Promise((r) => setTimeout(r, 280));
           } catch (err) {
-            console.warn(`Failed downloading ${item.name}:`, err);
+            console.warn(`Failed caching ${item.name} offline:`, err);
           }
         }
 
@@ -3556,7 +3719,7 @@
         await refreshOfflineSetsCache();
         renderDropboxEntries();
         renderSheetDrawerList();
-        showToast(`Downloaded ${savedCount} / ${pdfItems.length} PDFs directly to your device!`, 'success', 4200);
+        showToast(`${savedCount} / ${pdfItems.length} PDFs are now Available Offline on this device!`, 'success', 4000);
       }
 
       // ---------------------------------------------------------------------
@@ -3581,7 +3744,6 @@
         const allTargetsCount = getAllSelectableTargets().length;
         document.getElementById('footerProjectPoolCount').textContent = `${allTargetsCount} Target Sheet(s) Ready`;
 
-        // Multi-page stepper visibility
         const stepper = document.getElementById('multiPageStepperWrap');
         if (state.activeSet.sheets.length > 1) {
           stepper.classList.remove('hidden');
@@ -3593,8 +3755,18 @@
         }
 
         const isOfflineSaved = state.offlineSetsMap.has(state.activeSet.setId);
-        document.getElementById('offlineBadgePill').classList.toggle('hidden', !isOfflineSaved);
-        document.getElementById('saveOfflineLabel').textContent = isOfflineSaved ? 'Download Again' : 'Save to Device';
+        const btn = document.getElementById('saveOfflineBtn');
+        const label = document.getElementById('saveOfflineLabel');
+        const pill = document.getElementById('offlineBadgePill');
+        if (isOfflineSaved) {
+          pill.classList.remove('hidden');
+          label.textContent = 'Available Offline';
+          btn.className = 'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-950/90 hover:bg-emerald-900 text-emerald-200 border border-emerald-600/60 transition shrink-0';
+        } else {
+          pill.classList.add('hidden');
+          label.textContent = 'Make Available Offline';
+          btn.className = 'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700 transition shrink-0';
+        }
       }
 
       function switchDrawerTab(tabName) {
@@ -3626,13 +3798,13 @@
         const q = (document.getElementById('sheetSearchInput')?.value || '').trim().toLowerCase();
         listEl.innerHTML = '';
 
-        // Show "Save Entire Folder Offline" button if projectFiles has Dropbox PDFs
+        // Show "Make Folder Available Offline" button if projectFiles has Dropbox PDFs
         const dbxProjectPdfs = state.projectFiles.filter((pf) => pf.dropboxPath);
         const saveFolderBtn = document.getElementById('drawerSaveFolderOfflineBtn');
         if (dbxProjectPdfs.length > 0) {
           saveFolderBtn.classList.remove('hidden');
           saveFolderBtn.classList.add('flex');
-          document.getElementById('drawerSaveFolderOfflineText').textContent = `Download All ${dbxProjectPdfs.length} Folder PDFs to Device`;
+          document.getElementById('drawerSaveFolderOfflineText').textContent = `Make All ${dbxProjectPdfs.length} Folder PDFs Available Offline`;
         } else {
           saveFolderBtn.classList.add('hidden');
           saveFolderBtn.classList.remove('flex');
@@ -3863,27 +4035,37 @@
 
         listEl.innerHTML = '';
         if (state.offlineSetsMap.size === 0) {
-          listEl.innerHTML = `<div class="p-6 text-center text-xs text-slate-400">No PDFs saved on this device yet. Tap <strong>Save to Device</strong> or <strong>Download Folder PDFs to Device</strong>.</div>`;
+          listEl.innerHTML = `<div class="p-6 text-center text-xs text-slate-400">No blueprints marked <strong>Available Offline</strong> yet. Tap <strong>Make Available Offline</strong> on any drawing or folder to store it on your device for instant in-app viewing.</div>`;
           return;
         }
 
         state.offlineSetsMap.forEach((rec) => {
+          const isCurrent = state.activeSet && state.activeSet.setId === rec.setId;
           const row = document.createElement('div');
-          row.className = 'p-2.5 rounded-xl bg-slate-800/80 border border-slate-700 flex items-center justify-between gap-2';
+          row.className = `p-2.5 rounded-xl border flex items-center justify-between gap-2 transition ${
+            isCurrent
+              ? 'bg-emerald-950/60 border-emerald-500/80'
+              : 'bg-slate-800/80 hover:bg-slate-800 border-slate-700'
+          }`;
           row.innerHTML = `
             <div class="min-w-0 flex-1 cursor-pointer" data-open-offline>
-              <div class="text-xs font-mono font-bold text-white truncate">${escapeHtml(rec.name)}</div>
-              <div class="text-[10px] font-mono text-emerald-400 mt-0.5">${formatBytes(rec.size)} • Saved on This Device</div>
+              <div class="flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full bg-emerald-400 shrink-0"></span>
+                <span class="text-xs font-mono font-bold text-white truncate">${escapeHtml(rec.name)}</span>
+              </div>
+              <div class="text-[10px] font-mono text-emerald-400 mt-0.5 truncate">
+                ${formatBytes(rec.size)} • ${escapeHtml(rec.storedLocation || 'Stored on Device')}
+              </div>
             </div>
             <div class="flex items-center gap-1 shrink-0">
               ${
                 rec.pdfBuffer
-                  ? `<button type="button" data-dl-device title="Save Copy to Device Files / Downloads" class="px-2 py-1 rounded bg-sky-950/90 hover:bg-sky-900 text-sky-300 text-[10px] font-bold border border-sky-700">
-                      Save File
+                  ? `<button type="button" data-dl-device title="Export a standalone PDF copy to Downloads" class="px-2 py-1 rounded bg-slate-900 hover:bg-slate-700 text-slate-300 text-[10px] font-semibold border border-slate-700">
+                      Export
                     </button>`
                   : ''
               }
-              <button type="button" data-del-offline class="px-2 py-1 rounded bg-rose-950/80 text-rose-300 text-[10px] font-bold border border-rose-800">
+              <button type="button" data-del-offline title="Remove Offline Copy from Device" class="px-2 py-1 rounded bg-rose-950/80 hover:bg-rose-900 text-rose-300 text-[10px] font-bold border border-rose-800">
                 Remove
               </button>
             </div>
@@ -3891,10 +4073,15 @@
 
           row.querySelector('[data-open-offline]').addEventListener('click', async () => {
             document.getElementById('sheetDrawerOverlay').classList.add('hidden');
-            if (rec.setId === SAMPLE_SET_ID || !rec.pdfBuffer) {
+            if (rec.setId === SAMPLE_SET_ID) {
               await activateDrawingSet(createSampleVectorSet(), 0);
             } else {
-              const parsed = await parsePdfIntoDrawingSet(rec.pdfBuffer, {
+              const storedBuf = await ProDrawOfflineDB.readFromDeviceFileSystem(rec);
+              if (!storedBuf) {
+                showToast('Could not read offline file from device storage.', 'error');
+                return;
+              }
+              const parsed = await parsePdfIntoDrawingSet(storedBuf, {
                 setId: rec.setId,
                 name: rec.name,
                 source: 'offline',
@@ -3902,19 +4089,23 @@
                 dropboxNamespaceId: rec.dropboxNamespaceId
               });
               await activateDrawingSet(parsed, 0);
+              showToast(`Opened "${rec.name}" directly from device storage.`, 'info', 2200);
             }
           });
 
-          row.querySelector('[data-dl-device]')?.addEventListener('click', (e) => {
+          row.querySelector('[data-dl-device]')?.addEventListener('click', async (e) => {
             e.stopPropagation();
-            triggerDirectDeviceDownload(rec.pdfBuffer, rec.name, 'application/pdf');
-            showToast(`Downloaded "${rec.name}" to your device's Downloads/Files folder.`, 'success');
+            const storedBuf = await ProDrawOfflineDB.readFromDeviceFileSystem(rec);
+            triggerDirectDeviceDownload(storedBuf, rec.name, 'application/pdf');
+            showToast(`Exported a copy of "${rec.name}" to your Downloads folder.`, 'success');
           });
 
           row.querySelector('[data-del-offline]').addEventListener('click', async () => {
             await ProDrawOfflineDB.deleteSet(rec.setId);
             await refreshOfflineSetsCache();
             renderDrawerOfflineList();
+            renderDropboxEntries();
+            showToast(`Removed "${rec.name}" from device offline storage.`, 'info');
           });
 
           listEl.appendChild(row);
@@ -3941,31 +4132,6 @@
         try {
           await ensureDevicePersistentStorage();
 
-          // 1. Trigger direct file download to the user's device (Downloads / Files app)
-          if (state.activeSet.pdfBuffer) {
-            triggerDirectDeviceDownload(state.activeSet.pdfBuffer, state.activeSet.name, 'application/pdf');
-          } else if (state.activeSet.source === 'vector') {
-            // For built-in vector sample sheet, export a crisp PNG image directly to the device
-            const baseCanvas = document.getElementById('pdfBaseCanvas');
-            const sheet = state.activeSet.sheets[state.activeSheetIndex] || state.activeSet.sheets[0];
-            if (baseCanvas && baseCanvas.toBlob) {
-              baseCanvas.toBlob((blob) => {
-                if (!blob) return;
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `${sheet.sheetNo}_${sheet.title.replace(/\s+/g, '_')}.png`;
-                document.body.appendChild(a);
-                a.click();
-                setTimeout(() => {
-                  a.remove();
-                  URL.revokeObjectURL(url);
-                }, 1000);
-              }, 'image/png');
-            }
-          }
-
-          // 2. Also store in this device's local database so cross-sheet callout links resolve offline automatically
           const record = {
             setId: state.activeSet.setId,
             name: state.activeSet.name,
@@ -3977,13 +4143,14 @@
             sheets: state.activeSet.sheets,
             pdfBuffer: state.activeSet.pdfBuffer || null
           };
-          await ProDrawOfflineDB.saveSet(record);
+          const savedRec = await ProDrawOfflineDB.saveSet(record);
           await refreshOfflineSetsCache();
           renderSheetDrawerList();
-          showToast(`Downloaded "${state.activeSet.name}" directly to your device & cached for offline links!`, 'success', 3600);
+          renderDropboxEntries();
+          showToast(`"${state.activeSet.name}" is now Available Offline (${savedRec.storedLocation})!`, 'success', 3400);
         } catch (err) {
-          console.error('Save to device error:', err);
-          showToast(`Device save failed: ${err.message}`, 'error');
+          console.error('Make available offline error:', err);
+          showToast(`Offline save failed: ${err.message}`, 'error');
         }
       }
 
@@ -3995,8 +4162,8 @@
         if (state.offlineSetsMap.size === 0) {
           panel.innerHTML = `
             <div class="p-8 text-center text-xs text-slate-500 space-y-2">
-              <div class="font-bold text-slate-700">No Offline Drawing PDFs Saved on This Device Yet</div>
-              <p>Tap <strong>Save to Device</strong> or <strong>Download All PDFs to Device</strong> to save drawings directly to your device's storage.</p>
+              <div class="font-bold text-slate-700">No Blueprints Marked Available Offline Yet</div>
+              <p>Tap <strong>Available Offline</strong> next to any PDF in the Dropbox Browser (or in the top toolbar) to store it on your device and open it directly inside ProDraw anytime—even without internet.</p>
             </div>
           `;
           return;
@@ -4007,24 +4174,27 @@
           row.className = 'p-3 rounded-xl bg-white border border-slate-200 flex items-center justify-between gap-2 shadow-2xs';
           row.innerHTML = `
             <div class="min-w-0 flex-1">
-              <div class="text-xs font-mono font-bold text-slate-900 truncate">${escapeHtml(rec.name)}</div>
-              <div class="text-[11px] font-mono text-slate-500 mt-0.5">
-                ${formatBytes(rec.size)} • ${rec.dropboxPath || 'Saved on This Device'}
+              <div class="flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
+                <span class="text-xs font-mono font-bold text-slate-900 truncate">${escapeHtml(rec.name)}</span>
+              </div>
+              <div class="text-[11px] font-mono text-slate-500 mt-0.5 truncate">
+                ${formatBytes(rec.size)} • ${escapeHtml(rec.storedLocation || 'Stored on Device')} ${rec.dropboxPath ? `(${escapeHtml(rec.dropboxPath)})` : ''}
               </div>
             </div>
             <div class="flex items-center gap-1.5 shrink-0">
+              <button type="button" data-open-offline-set
+                class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold">
+                Open from Device
+              </button>
               ${
                 rec.pdfBuffer
-                  ? `<button type="button" data-dl-device-set
-                      class="px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 text-xs font-bold">
-                      Download File
+                  ? `<button type="button" data-dl-device-set title="Export standalone PDF copy to Downloads folder"
+                      class="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 text-xs font-semibold">
+                      Export Copy
                     </button>`
                   : ''
               }
-              <button type="button" data-open-offline-set
-                class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold">
-                Open
-              </button>
               <button type="button" data-del-offline-set
                 class="px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-semibold">
                 Remove
@@ -4032,17 +4202,23 @@
             </div>
           `;
 
-          row.querySelector('[data-dl-device-set]')?.addEventListener('click', () => {
-            triggerDirectDeviceDownload(rec.pdfBuffer, rec.name, 'application/pdf');
-            showToast(`Downloaded "${rec.name}" directly to your device.`, 'success');
+          row.querySelector('[data-dl-device-set]')?.addEventListener('click', async () => {
+            const storedBuf = await ProDrawOfflineDB.readFromDeviceFileSystem(rec);
+            triggerDirectDeviceDownload(storedBuf, rec.name, 'application/pdf');
+            showToast(`Exported a copy of "${rec.name}" to your Downloads folder.`, 'success');
           });
 
           row.querySelector('[data-open-offline-set]').addEventListener('click', async () => {
             document.getElementById('dropboxModal').classList.add('hidden');
-            if (rec.setId === SAMPLE_SET_ID || !rec.pdfBuffer) {
+            if (rec.setId === SAMPLE_SET_ID) {
               await activateDrawingSet(createSampleVectorSet(), 0);
             } else {
-              const parsed = await parsePdfIntoDrawingSet(rec.pdfBuffer, {
+              const storedBuf = await ProDrawOfflineDB.readFromDeviceFileSystem(rec);
+              if (!storedBuf) {
+                showToast('Could not read file from device storage.', 'error');
+                return;
+              }
+              const parsed = await parsePdfIntoDrawingSet(storedBuf, {
                 setId: rec.setId,
                 name: rec.name,
                 source: 'offline',
@@ -4050,13 +4226,15 @@
                 dropboxNamespaceId: rec.dropboxNamespaceId
               });
               await activateDrawingSet(parsed, 0);
+              showToast(`Opened "${rec.name}" directly from device storage.`, 'info', 2200);
             }
           });
 
           row.querySelector('[data-del-offline-set]').addEventListener('click', async () => {
             await ProDrawOfflineDB.deleteSet(rec.setId);
             await refreshOfflineSetsCache();
-            showToast(`Removed "${rec.name}" from device cache.`, 'info');
+            renderDropboxEntries();
+            showToast(`Removed "${rec.name}" from device offline storage.`, 'info');
           });
 
           panel.appendChild(row);
@@ -4241,7 +4419,7 @@
         if (pdfEntries.length > 0) {
           saveFolderBtn.classList.remove('hidden');
           saveFolderBtn.classList.add('flex');
-          document.getElementById('modalSaveFolderOfflineText').textContent = `Download All ${pdfEntries.length} PDFs to Device`;
+          document.getElementById('modalSaveFolderOfflineText').textContent = `Make All ${pdfEntries.length} PDFs Available Offline`;
         } else {
           saveFolderBtn.classList.add('hidden');
           saveFolderBtn.classList.remove('flex');
@@ -4281,24 +4459,28 @@
             const isCached = state.offlineSetsMap.has(setId);
             row.innerHTML = `
               <div class="flex items-center gap-2.5 min-w-0 flex-1">
-                <div class="w-8 h-8 rounded-lg bg-sky-100 text-sky-800 flex items-center justify-center shrink-0 font-mono font-bold text-[11px]">
+                <div class="w-8 h-8 rounded-lg ${isCached ? 'bg-emerald-100 text-emerald-800' : 'bg-sky-100 text-sky-800'} flex items-center justify-center shrink-0 font-mono font-bold text-[11px]">
                   PDF
                 </div>
                 <div class="min-w-0 flex-1">
                   <div class="text-xs font-mono font-bold text-slate-900 truncate">${escapeHtml(entry.name)}</div>
                   <div class="text-[11px] font-mono text-slate-500">
-                    ${formatBytes(entry.size)} ${isCached ? '• <span class="text-emerald-700 font-bold">On Device</span>' : ''}
+                    ${formatBytes(entry.size)} ${isCached ? '• <span class="text-emerald-700 font-bold">Available Offline on Device</span>' : ''}
                   </div>
                 </div>
               </div>
               <div class="flex items-center gap-1.5 shrink-0">
-                <button type="button" data-save-dbx-device title="Download PDF Directly to This Device"
-                  class="px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 text-xs font-bold">
-                  Save to Device
+                <button type="button" data-save-dbx-device title="${isCached ? 'Available Offline on Device (Tap to remove offline copy)' : 'Make Available Offline on This Device'}"
+                  class="px-2.5 py-1.5 rounded-lg border text-xs font-bold transition ${
+                    isCached
+                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700'
+                      : 'bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-800 border-slate-300'
+                  }">
+                  ${isCached ? '✓ Available Offline' : 'Make Offline'}
                 </button>
                 <button type="button" data-open-dbx-pdf
                   class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold">
-                  Open Drawing
+                  Open
                 </button>
               </div>
             `;
@@ -4306,7 +4488,14 @@
             row.querySelector('[data-save-dbx-device]').addEventListener('click', async (e) => {
               e.stopPropagation();
               const btn = e.currentTarget;
-              btn.textContent = 'Saving...';
+              if (state.offlineSetsMap.has(setId)) {
+                await ProDrawOfflineDB.deleteSet(setId);
+                await refreshOfflineSetsCache();
+                renderDropboxEntries();
+                showToast(`"${entry.name}" is now online-only (offline copy removed).`, 'info');
+                return;
+              }
+              btn.textContent = 'Syncing...';
               btn.disabled = true;
               try {
                 await ensureDevicePersistentStorage();
@@ -4316,7 +4505,6 @@
                   dropboxPath: entry.path_lower,
                   namespaceId: state.dbxNamespaceId
                 });
-                triggerDirectDeviceDownload(buf, entry.name, 'application/pdf');
                 const cleanName = entry.name.replace(/\.pdf$/i, '');
                 await ProDrawOfflineDB.saveSet({
                   setId,
@@ -4331,11 +4519,10 @@
                 });
                 await refreshOfflineSetsCache();
                 renderDropboxEntries();
-                showToast(`Downloaded "${entry.name}" directly to your device!`, 'success');
+                showToast(`"${entry.name}" is now Available Offline on this device!`, 'success');
               } catch (err) {
-                showToast(err.message || 'Failed to download PDF to device.', 'error');
+                showToast(err.message || 'Failed to make PDF available offline.', 'error');
               } finally {
-                btn.textContent = 'Save to Device';
                 btn.disabled = false;
               }
             });
@@ -5004,14 +5191,19 @@
         document.getElementById('drawerOpenDevicePdfsBtn')?.addEventListener('click', () => {
           document.getElementById('localPdfInput').click();
         });
+        document.getElementById('drawerLinkDeviceFolderBtn')?.addEventListener('click', () => {
+          ProDrawOfflineDB.linkNativeDeviceFolder();
+        });
 
         document.getElementById('localPdfInput').addEventListener('change', async (e) => {
           const files = Array.from(e.target.files || []);
           if (files.length === 0) return;
           e.target.value = '';
-          document.getElementById('dropboxModal').classList.add('hidden');
 
+          document.getElementById('dropboxModal').classList.add('hidden');
+          document.getElementById('sheetDrawerOverlay').classList.add('hidden');
           const busyEl = document.getElementById('pdfBusyIndicator');
+          document.getElementById('pdfBusyText').textContent = `Loading ${files.length} local PDF(s)...`;
           busyEl.classList.remove('hidden');
 
           try {
@@ -5020,9 +5212,8 @@
 
             for (let i = 0; i < files.length; i++) {
               const file = files[i];
-              document.getElementById('pdfBusyText').textContent = `Loading local PDF ${i + 1}/${files.length}: "${file.name}"...`;
-              const buf = await file.arrayBuffer();
               const docId = `local:${file.name.toLowerCase()}`;
+              const buf = await file.arrayBuffer();
               state.memoryPdfBuffers.set(docId, buf);
 
               localSiblings.push({
@@ -5031,7 +5222,7 @@
                 dropboxPath: null,
                 dropboxNamespaceId: null,
                 folderPath: 'Local Import',
-                size: file.size,
+                size: file.size || buf.byteLength,
                 source: 'local'
               });
 
@@ -5133,6 +5324,7 @@
           // Non-blocking async initialization of IndexedDB & Dropbox OAuth callback
           (async () => {
             try {
+              await ProDrawOfflineDB.restoreLinkedFolderHandle();
               await refreshOfflineSetsCache();
             } catch (dbErr) {
               console.warn('IndexedDB unavailable:', dbErr);
