@@ -213,7 +213,7 @@
     <!-- Row 1 Right / Row 2 Mobile: Zoom Controls, Add Link, Save Offline, Dropbox -->
     <div class="flex items-center justify-between lg:justify-end gap-1.5 w-full lg:w-auto overflow-x-auto">
 
-      <!-- Zoom Controls (-, Clickable 100%/200% Badge, +, Fit) -->
+      <!-- Zoom Controls (-, Clickable Zoom %, +, Fit, 100%, 200%, 400%) -->
       <div class="flex items-center bg-slate-800 border border-slate-700 rounded-lg p-0.5 shrink-0">
         <button id="zoomOutBtn" type="button" title="Zoom Out (-)"
           class="p-1.5 rounded hover:bg-slate-700 active:bg-slate-600 text-slate-200 transition">
@@ -221,8 +221,8 @@
             <line x1="5" y1="12" x2="19" y2="12"></line>
           </svg>
         </button>
-        <button id="zoomTogglePresetBtn" type="button" title="Tap to toggle 100% / 200% Zoom"
-          class="font-mono text-[11px] font-bold text-sky-300 hover:text-white px-1.5 py-1 min-w-[44px] text-center rounded hover:bg-slate-700 transition">
+        <button id="zoomTogglePresetBtn" type="button" title="Tap to cycle 100% / 200% / 400% Zoom"
+          class="font-mono text-[11px] font-bold text-sky-300 hover:text-white px-1.5 py-1 min-w-[48px] text-center rounded hover:bg-slate-700 transition">
           100%
         </button>
         <button id="zoomInBtn" type="button" title="Zoom In (+)"
@@ -233,11 +233,30 @@
           </svg>
         </button>
         <div class="h-4 w-px bg-slate-700 mx-0.5"></div>
-        <button id="zoomFitBtn" type="button" title="Fit Entire Sheet to Viewport"
+        <button id="zoomFitBtn" type="button" title="Fit Entire Sheet to Viewport (0)"
           class="px-2 py-1 rounded hover:bg-slate-700 active:bg-slate-600 text-[11px] font-semibold text-slate-200 transition">
           Fit
         </button>
+        <button id="zoom100Btn" type="button" title="Zoom to 100% (1)"
+          class="hidden sm:inline-block px-1.5 py-1 rounded hover:bg-slate-700 active:bg-slate-600 text-[10px] font-mono font-semibold text-slate-300 transition">
+          100%
+        </button>
+        <button id="zoom200Btn" type="button" title="Zoom to 200% (2)"
+          class="hidden md:inline-block px-1.5 py-1 rounded hover:bg-slate-700 active:bg-slate-600 text-[10px] font-mono font-semibold text-slate-300 transition">
+          200%
+        </button>
+        <button id="zoom400Btn" type="button" title="Zoom to 400% Detail Inspection (4)"
+          class="hidden md:inline-block px-1.5 py-1 rounded hover:bg-slate-700 active:bg-slate-600 text-[10px] font-mono font-semibold text-amber-300 transition">
+          400%
+        </button>
       </div>
+
+      <!-- HD Vector Quality Multiplier Selector (HD 1.25x / Ultra HD 1.75x / Max Crisp 2.25x) -->
+      <button id="hdQualityToggleBtn" type="button" title="Cycle PDF Vector Supersampling Quality (HD / Ultra HD / Max Crisp)"
+        class="flex items-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-mono font-bold bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-600/50 transition shrink-0">
+        <span id="hdQualityDot" class="w-2 h-2 rounded-full bg-emerald-400"></span>
+        <span id="hdQualityLabel">Ultra HD</span>
+      </button>
 
       <!-- Add Link Mode Toggle Button -->
       <button id="toggleAddLinkBtn" type="button" title="Draw Callout Link to Another PDF or Sheet (L)"
@@ -312,15 +331,18 @@
       <span id="pdfBusyText">Loading PDF sheet...</span>
     </div>
 
-    <!-- Transformed Drawing Stage (Canvas + Callout Overlay Layer + Rubber-band) -->
-    <div id="drawingStage" class="absolute top-0 left-0 origin-top-left will-change-transform bg-white shadow-2xl ring-1 ring-slate-900/20">
-      <canvas id="blueprintCanvas" class="block pointer-events-none"></canvas>
+    <!-- Transformed Drawing Stage (Base Canvas + Dynamic High-DPI Detail Patch Canvas + Callout Overlay Layer) -->
+    <div id="drawingStage" class="absolute top-0 left-0 origin-top-left bg-white shadow-2xl ring-1 ring-slate-900/20">
+      <canvas id="pdfBaseCanvas" class="block pointer-events-none"></canvas>
+      <canvas id="pdfDetailCanvas" class="absolute top-0 left-0 block pointer-events-none hidden"></canvas>
       <div id="calloutOverlayLayer" class="absolute inset-0 overflow-hidden pointer-events-none"></div>
       <div id="calloutRubberband" class="callout-rubberband hidden"></div>
     </div>
 
-    <!-- Bottom-Right Sheet & Project Folder Telemetry Pill -->
+    <!-- Bottom-Right Sheet, Vector HD Status & Project Folder Telemetry Pill -->
     <div class="hidden sm:flex items-center gap-2 absolute bottom-3 right-3 z-10 px-3 py-1.5 rounded-xl bg-slate-900/90 text-slate-200 text-[11px] font-mono border border-slate-700 pointer-events-none">
+      <span id="vectorStatusBadge" class="text-emerald-400 font-bold">Vector HD Ready</span>
+      <span class="text-slate-500">|</span>
       <span id="footerSetTitle">Commercial Sample Set</span>
       <span class="text-slate-500">|</span>
       <span id="footerSheetCounter">Sheet 1 / 4</span>
@@ -804,7 +826,11 @@
       // 1. CONSTANTS, NATURAL COLLATOR & SAFE STORAGE
       // ---------------------------------------------------------------------
       const SAMPLE_SET_ID = 'sample_commercial_vector_set_v1';
-      const MAX_CANVAS_DIM = 2200; // Strict GPU/RAM safety cap for mobile Chrome
+      const BASE_LOGICAL_SCALE = 1.5;          // Logical coordinate scale for PDFs (keeps normalized 0..1 callouts invariant)
+      const MAX_BASE_PIXELS = 16777216;        // 4096 x 4096 full-sheet base canvas pixel budget
+      const MAX_BASE_DIM = 4096;               // Maximum single edge for Layer 1 full-sheet base canvas
+      const MAX_PATCH_PIXELS = 16777216;       // 4096 x 4096 viewport detail patch pixel budget
+      const MAX_PATCH_DIM = 4096;              // Maximum single edge for Layer 2 viewport detail canvas
       const DROPBOX_SCOPES = 'files.metadata.read files.content.read sharing.read account_info.read';
       const naturalCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
@@ -1037,16 +1063,20 @@
         // Each entry: { docMode, setId, fileName, dropboxPath, dropboxNamespaceId, pageIndex, zoom, panX, panY, displayLabel }
         navHistory: [],
 
-        // Viewport Pan & Zoom
+        // Viewport Pan, Zoom & Multi-Stage High-DPI Rendering State
         zoom: 1,
-        minZoom: 0.2,
-        maxZoom: 5.0,
+        minZoom: 0.15,
+        maxZoom: 10.0,
         panX: 0,
         panY: 0,
         sheetWidth: 1440,
         sheetHeight: 960,
-        renderTimer: null,
+        qualityMultiplier: Number(SafeStorage.get('prodraw_hd_quality_mult', '1.75')) || 1.75,
+        baseRenderTask: null,
+        detailRenderTask: null,
+        detailDebounceTimer: null,
         renderSeq: 0,
+        detailSeq: 0,
 
         // Add Link Mode & Callout Creation/Editing Modal state
         addLinkMode: false,
@@ -1080,26 +1110,28 @@
       };
 
       // ---------------------------------------------------------------------
-      // 5. PROJECT DRAWING SET REGISTRY & TARGET CANDIDATE BUILDER
+      // 5. PROJECT SIBLING PDF DISCOVERY & UNIFIED TARGET PICKER POOL
       // ---------------------------------------------------------------------
-      function registerProjectSiblingFiles(entries, folderPath, namespaceId = null) {
-        const pdfItems = entries
-          .filter((e) => e['.tag'] === 'file' && e.name.toLowerCase().endsWith('.pdf'))
-          .map((e) => ({
-            docId: buildDropboxDocId(e.path_lower, namespaceId),
-            name: e.name,
-            dropboxPath: e.path_lower,
-            dropboxNamespaceId: namespaceId || null,
-            folderPath: folderPath || getParentFolderPath(e.path_lower) || '/',
-            size: e.size || 0,
-            source: 'dropbox'
-          }))
-          .sort((a, b) => naturalCollator.compare(a.name, b.name));
-
-        if (pdfItems.length > 0) {
-          // Merge with any existing project files while prioritizing current folder PDFs
+      function registerProjectSiblingFiles(entries, folderPath = '', namespaceId = null) {
+        if (!Array.isArray(entries)) return;
+        const pdfEntries = entries.filter(
+          (e) => e && e['.tag'] === 'file' && typeof e.name === 'string' && e.name.toLowerCase().endsWith('.pdf')
+        );
+        if (pdfEntries.length > 0) {
           const byId = new Map();
-          pdfItems.forEach((item) => byId.set(item.docId, item));
+          pdfEntries.forEach((e) => {
+            const docId = buildDropboxDocId(e.path_lower, namespaceId);
+            byId.set(docId, {
+              docId,
+              name: e.name,
+              dropboxPath: e.path_lower,
+              dropboxNamespaceId: namespaceId || null,
+              folderPath: folderPath || getParentFolderPath(e.path_display || e.path_lower) || '/',
+              size: e.size || 0,
+              source: 'dropbox'
+            });
+          });
+          // Merge with any previously discovered files from the same folder or keep existing list
           state.projectFiles.forEach((existing) => {
             if (!byId.has(existing.docId)) {
               byId.set(existing.docId, existing);
@@ -1786,8 +1818,58 @@
       }
 
       // ---------------------------------------------------------------------
-      // 7. HIGH-DPI SHEET RENDERING & VIEWPORT GEOMETRY
+      // 7. MULTI-STAGE ULTRA-SHARP VECTOR PDF RENDERING & VIEWPORT GEOMETRY
       // ---------------------------------------------------------------------
+      const offscreenDetailCanvas = document.createElement('canvas');
+
+      function setStageGestureWillChange(active) {
+        const stage = document.getElementById('drawingStage');
+        if (!stage) return;
+        stage.style.willChange = active ? 'transform' : 'auto';
+      }
+
+      function updateVectorStatusUI(statusText, isBusy = false) {
+        const badge = document.getElementById('vectorStatusBadge');
+        const dot = document.getElementById('hdQualityDot');
+        if (badge) {
+          badge.textContent = statusText;
+          badge.className = isBusy ? 'text-amber-300 font-bold animate-pulse' : 'text-emerald-400 font-bold';
+        }
+        if (dot) {
+          dot.className = isBusy
+            ? 'w-2 h-2 rounded-full bg-amber-400 animate-ping'
+            : 'w-2 h-2 rounded-full bg-emerald-400';
+        }
+      }
+
+      function updateHdQualityButtonUI() {
+        const label = document.getElementById('hdQualityLabel');
+        if (!label) return;
+        if (state.qualityMultiplier >= 2.2) {
+          label.textContent = 'Max Crisp 2.25x';
+        } else if (state.qualityMultiplier >= 1.7) {
+          label.textContent = 'Ultra HD 1.75x';
+        } else {
+          label.textContent = 'HD 1.25x';
+        }
+      }
+
+      function clearDetailOverlayCanvas() {
+        clearTimeout(state.detailDebounceTimer);
+        if (state.detailRenderTask) {
+          try {
+            state.detailRenderTask.cancel();
+          } catch {
+            // Ignore cancel error
+          }
+          state.detailRenderTask = null;
+        }
+        const detailCanvas = document.getElementById('pdfDetailCanvas');
+        if (detailCanvas) {
+          detailCanvas.classList.add('hidden');
+        }
+      }
+
       function computeFitZoomAndPan() {
         const vp = document.getElementById('canvasViewport');
         const rect = vp.getBoundingClientRect();
@@ -1802,7 +1884,7 @@
 
       function applyStageTransform() {
         const stage = document.getElementById('drawingStage');
-        const canvas = document.getElementById('blueprintCanvas');
+        const baseCanvas = document.getElementById('pdfBaseCanvas');
         const cssW = state.sheetWidth * state.zoom;
         const cssH = state.sheetHeight * state.zoom;
 
@@ -1810,8 +1892,8 @@
         stage.style.height = `${cssH}px`;
         stage.style.transform = `translate3d(${state.panX}px, ${state.panY}px, 0)`;
 
-        canvas.style.width = `${cssW}px`;
-        canvas.style.height = `${cssH}px`;
+        baseCanvas.style.width = `${cssW}px`;
+        baseCanvas.style.height = `${cssH}px`;
 
         const zoomLabel = document.getElementById('zoomTogglePresetBtn');
         if (zoomLabel) {
@@ -1819,12 +1901,25 @@
         }
       }
 
+      // Layer 1: High-DPI Full-Sheet Base Canvas (`#pdfBaseCanvas`)
       async function renderCurrentSheet(options = {}) {
         if (!state.activeSet || !state.activeSet.sheets.length) return;
         const seq = ++state.renderSeq;
+        clearDetailOverlayCanvas();
+
+        if (state.baseRenderTask) {
+          try {
+            state.baseRenderTask.cancel();
+          } catch {
+            // Ignore
+          }
+          state.baseRenderTask = null;
+        }
+
         const sheet = state.activeSet.sheets[state.activeSheetIndex] || state.activeSet.sheets[0];
-        const canvas = document.getElementById('blueprintCanvas');
-        const ctx = canvas.getContext('2d', { alpha: false });
+        const baseCanvas = document.getElementById('pdfBaseCanvas');
+        const ctx = baseCanvas.getContext('2d', { alpha: false });
+        const dpr = Math.max(1, window.devicePixelRatio || 1);
 
         if (state.activeSet.source === 'vector') {
           state.sheetWidth = 1440;
@@ -1837,33 +1932,35 @@
             computeFitZoomAndPan();
           }
 
-          const dpr = Math.min(window.devicePixelRatio || 1, 2);
-          let targetW = Math.round(state.sheetWidth * state.zoom * dpr);
-          let targetH = Math.round(state.sheetHeight * state.zoom * dpr);
-          const maxSide = Math.max(targetW, targetH);
-          if (maxSide > MAX_CANVAS_DIM) {
-            const ratio = MAX_CANVAS_DIM / maxSide;
-            targetW = Math.round(targetW * ratio);
-            targetH = Math.round(targetH * ratio);
-          }
-          targetW = Math.max(480, targetW);
-          targetH = Math.max(320, targetH);
+          let baseRatio = Math.max(1.5, dpr * state.qualityMultiplier);
+          const maxDimRatio = MAX_BASE_DIM / Math.max(state.sheetWidth, state.sheetHeight);
+          const maxAreaRatio = Math.sqrt(MAX_BASE_PIXELS / (state.sheetWidth * state.sheetHeight));
+          baseRatio = Math.min(baseRatio, maxDimRatio, maxAreaRatio);
 
-          canvas.width = targetW;
-          canvas.height = targetH;
+          const targetW = Math.max(720, Math.round(state.sheetWidth * baseRatio));
+          const targetH = Math.max(480, Math.round(state.sheetHeight * baseRatio));
+
+          baseCanvas.width = targetW;
+          baseCanvas.height = targetH;
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
           drawVectorBlueprintSheet(ctx, sheet, targetW, targetH);
 
           applyStageTransform();
           renderCalloutOverlays();
           updateActiveSheetUI();
+          updateVectorStatusUI('Vector HD Ready', false);
           if (options.flashTarget) triggerTargetArrivalRing(options.flashTarget);
+          scheduleDetailRender();
           return;
         }
 
-        // Real PDF rendering via lazy-loaded PDF.js
+        // Real PDF Layer 1 Base Render via PDF.js
         const busyEl = document.getElementById('pdfBusyIndicator');
         document.getElementById('pdfBusyText').textContent = 'Rendering high-DPI blueprint...';
         busyEl.classList.remove('hidden');
+        updateVectorStatusUI('Rendering Base HD...', true);
+
         try {
           await ensurePdfJsLoaded();
           if (!state.pdfProxy && state.activeSet.pdfBuffer) {
@@ -1875,9 +1972,12 @@
           if (!state.pdfProxy) return;
 
           const page = await state.pdfProxy.getPage(sheet.pageNumber || state.activeSheetIndex + 1);
-          const unscaledVp = page.getViewport({ scale: 1.0 });
-          state.sheetWidth = unscaledVp.width;
-          state.sheetHeight = unscaledVp.height;
+          if (seq !== state.renderSeq) return;
+
+          // Logical sheet size at BASE_LOGICAL_SCALE (1.5) keeps callout percentages 100% consistent
+          const logicalVp = page.getViewport({ scale: BASE_LOGICAL_SCALE });
+          state.sheetWidth = logicalVp.width;
+          state.sheetHeight = logicalVp.height;
 
           if (options.restoreViewport) {
             state.zoom = options.restoreViewport.zoom;
@@ -1887,41 +1987,194 @@
             computeFitZoomAndPan();
           }
 
-          const dpr = Math.min(window.devicePixelRatio || 1, 2);
-          let desiredScale = state.zoom * dpr;
-          const maxUnscaled = Math.max(state.sheetWidth, state.sheetHeight);
-          if (maxUnscaled * desiredScale > MAX_CANVAS_DIM) {
-            desiredScale = MAX_CANVAS_DIM / maxUnscaled;
-          }
-          desiredScale = Math.max(0.5, desiredScale);
+          // Render Layer 1 full sheet at the highest safe pixel density for instant overview + panning
+          let basePixelRatio = Math.max(1.35, Math.max(state.zoom, 1.0) * dpr * state.qualityMultiplier);
+          const maxDimRatio = MAX_BASE_DIM / Math.max(state.sheetWidth, state.sheetHeight);
+          const maxAreaRatio = Math.sqrt(MAX_BASE_PIXELS / (state.sheetWidth * state.sheetHeight));
+          basePixelRatio = Math.min(basePixelRatio, maxDimRatio, maxAreaRatio);
 
-          const renderVp = page.getViewport({ scale: desiredScale });
-          canvas.width = Math.floor(renderVp.width);
-          canvas.height = Math.floor(renderVp.height);
+          const basePdfScale = BASE_LOGICAL_SCALE * basePixelRatio;
+          const renderVp = page.getViewport({ scale: basePdfScale });
+
+          baseCanvas.width = Math.max(1, Math.floor(renderVp.width));
+          baseCanvas.height = Math.max(1, Math.floor(renderVp.height));
 
           ctx.fillStyle = '#ffffff';
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-          await page.render({ canvasContext: ctx, viewport: renderVp }).promise;
-          if (seq !== state.renderSeq) return;
+          ctx.fillRect(0, 0, baseCanvas.width, baseCanvas.height);
 
           applyStageTransform();
           renderCalloutOverlays();
           updateActiveSheetUI();
+
+          const renderTask = page.render({
+            canvasContext: ctx,
+            viewport: renderVp,
+            intent: 'display'
+          });
+          state.baseRenderTask = renderTask;
+
+          await renderTask.promise;
+          if (seq !== state.renderSeq) return;
+          state.baseRenderTask = null;
+
+          updateVectorStatusUI('Vector HD Ready', false);
           if (options.flashTarget) triggerTargetArrivalRing(options.flashTarget);
+
+          // Trigger Layer 2 ultra-sharp viewport detail overlay if zoomed in
+          scheduleDetailRender();
         } catch (err) {
+          if (err?.name === 'RenderingCancelledException') return;
           console.error('PDF render error:', err);
           showToast(err.message || 'Error rendering PDF page.', 'error');
         } finally {
-          busyEl.classList.add('hidden');
+          if (seq === state.renderSeq) {
+            busyEl.classList.add('hidden');
+          }
         }
       }
 
-      function scheduleCrispRerender() {
-        clearTimeout(state.renderTimer);
-        state.renderTimer = setTimeout(() => {
-          renderCurrentSheet({ fitToScreen: false }).catch(() => {});
-        }, 160);
+      // Layer 2: Dynamic Viewport Vector Detail Overlay (`#pdfDetailCanvas`)
+      // Re-rasterizes only the visible viewport + 25% overscan at true zoom * DPR * qualityMultiplier
+      function scheduleDetailRender() {
+        clearTimeout(state.detailDebounceTimer);
+
+        if (state.detailRenderTask) {
+          try {
+            state.detailRenderTask.cancel();
+          } catch {
+            // Ignore cancel error
+          }
+          state.detailRenderTask = null;
+        }
+
+        // If zoomed out (<= 1.05x), Layer 1 base canvas already has full physical resolution
+        if (!state.activeSet || state.zoom <= 1.05) {
+          const detailCanvas = document.getElementById('pdfDetailCanvas');
+          if (detailCanvas) detailCanvas.classList.add('hidden');
+          setStageGestureWillChange(false);
+          updateVectorStatusUI('Vector HD Ready', false);
+          return;
+        }
+
+        updateVectorStatusUI('Sharpening Detail...', true);
+        state.detailDebounceTimer = setTimeout(() => {
+          setStageGestureWillChange(false);
+          renderViewportDetailPatch().catch(() => {});
+        }, 130);
+      }
+
+      async function renderViewportDetailPatch() {
+        if (!state.activeSet || state.zoom <= 1.05) return;
+        const dSeq = ++state.detailSeq;
+        const vpEl = document.getElementById('canvasViewport');
+        const detailCanvas = document.getElementById('pdfDetailCanvas');
+        if (!vpEl || !detailCanvas) return;
+
+        const vpRect = vpEl.getBoundingClientRect();
+        if (vpRect.width <= 0 || vpRect.height <= 0) return;
+
+        // Visible rectangle in logical sheet coordinates (0..sheetWidth, 0..sheetHeight)
+        const visLeft = Math.max(0, -state.panX / state.zoom);
+        const visTop = Math.max(0, -state.panY / state.zoom);
+        const visRight = Math.min(state.sheetWidth, (vpRect.width - state.panX) / state.zoom);
+        const visBottom = Math.min(state.sheetHeight, (vpRect.height - state.panY) / state.zoom);
+
+        const visW = visRight - visLeft;
+        const visH = visBottom - visTop;
+        if (visW <= 4 || visH <= 4) return;
+
+        // Add 25% overscan buffer around visible viewport edges
+        const overscanX = visW * 0.25;
+        const overscanY = visH * 0.25;
+
+        const patchLeft = Math.max(0, Math.floor(visLeft - overscanX));
+        const patchTop = Math.max(0, Math.floor(visTop - overscanY));
+        const patchRight = Math.min(state.sheetWidth, Math.ceil(visRight + overscanX));
+        const patchBottom = Math.min(state.sheetHeight, Math.ceil(visBottom + overscanY));
+        const patchW = Math.max(1, patchRight - patchLeft);
+        const patchH = Math.max(1, patchBottom - patchTop);
+
+        // Compute target physical pixel ratio for the visible patch
+        const dpr = Math.max(1, window.devicePixelRatio || 1);
+        let pixelRatio = state.zoom * dpr * state.qualityMultiplier;
+        const maxDimScale = MAX_PATCH_DIM / Math.max(patchW, patchH);
+        const maxAreaScale = Math.sqrt(MAX_PATCH_PIXELS / (patchW * patchH));
+        pixelRatio = Math.min(pixelRatio, maxDimScale, maxAreaScale);
+
+        const targetPixelW = Math.max(1, Math.round(patchW * pixelRatio));
+        const targetPixelH = Math.max(1, Math.round(patchH * pixelRatio));
+
+        const sheet = state.activeSet.sheets[state.activeSheetIndex] || state.activeSet.sheets[0];
+
+        // Case A: Built-in Sample Vector Set high-DPI patch render
+        if (state.activeSet.source === 'vector') {
+          offscreenDetailCanvas.width = targetPixelW;
+          offscreenDetailCanvas.height = targetPixelH;
+          const offCtx = offscreenDetailCanvas.getContext('2d', { alpha: false });
+          offCtx.fillStyle = '#ffffff';
+          offCtx.fillRect(0, 0, targetPixelW, targetPixelH);
+          offCtx.save();
+          offCtx.translate(-patchLeft * pixelRatio, -patchTop * pixelRatio);
+          drawVectorBlueprintSheet(offCtx, sheet, state.sheetWidth * pixelRatio, state.sheetHeight * pixelRatio);
+          offCtx.restore();
+
+          if (dSeq !== state.detailSeq) return;
+          commitOffscreenToDetailCanvas(detailCanvas, targetPixelW, targetPixelH, patchLeft, patchTop, patchW, patchH);
+          updateVectorStatusUI(`Crisp ${Math.round(state.zoom * 100)}% HD`, false);
+          return;
+        }
+
+        // Case B: PDF.js Vector Detail Patch Render into offscreen buffer first (zero flicker)
+        if (!state.pdfProxy) return;
+        try {
+          const page = await state.pdfProxy.getPage(sheet.pageNumber || state.activeSheetIndex + 1);
+          if (dSeq !== state.detailSeq) return;
+
+          const detailPdfScale = BASE_LOGICAL_SCALE * pixelRatio;
+          const detailViewport = page.getViewport({
+            scale: detailPdfScale,
+            offsetX: -patchLeft * pixelRatio,
+            offsetY: -patchTop * pixelRatio
+          });
+
+          offscreenDetailCanvas.width = targetPixelW;
+          offscreenDetailCanvas.height = targetPixelH;
+          const offCtx = offscreenDetailCanvas.getContext('2d', { alpha: false });
+          offCtx.fillStyle = '#ffffff';
+          offCtx.fillRect(0, 0, targetPixelW, targetPixelH);
+
+          const task = page.render({
+            canvasContext: offCtx,
+            viewport: detailViewport,
+            intent: 'display'
+          });
+          state.detailRenderTask = task;
+
+          await task.promise;
+          if (dSeq !== state.detailSeq) return;
+          state.detailRenderTask = null;
+
+          commitOffscreenToDetailCanvas(detailCanvas, targetPixelW, targetPixelH, patchLeft, patchTop, patchW, patchH);
+          updateVectorStatusUI(`Crisp ${Math.round(state.zoom * 100)}% HD`, false);
+        } catch (err) {
+          if (err?.name === 'RenderingCancelledException') return;
+          console.warn('Detail patch render warning:', err);
+          updateVectorStatusUI('Vector HD Ready', false);
+        }
+      }
+
+      function commitOffscreenToDetailCanvas(detailCanvas, pixelW, pixelH, patchLeft, patchTop, patchW, patchH) {
+        detailCanvas.width = pixelW;
+        detailCanvas.height = pixelH;
+        const dCtx = detailCanvas.getContext('2d', { alpha: false });
+        dCtx.drawImage(offscreenDetailCanvas, 0, 0);
+
+        // Use percentage positioning inside #drawingStage so the detail patch tracks pan/zoom seamlessly
+        detailCanvas.style.left = `${(patchLeft / state.sheetWidth) * 100}%`;
+        detailCanvas.style.top = `${(patchTop / state.sheetHeight) * 100}%`;
+        detailCanvas.style.width = `${(patchW / state.sheetWidth) * 100}%`;
+        detailCanvas.style.height = `${(patchH / state.sheetHeight) * 100}%`;
+        detailCanvas.classList.remove('hidden');
       }
 
       function zoomAtClientPoint(newZoom, clientX, clientY) {
@@ -1940,7 +2193,7 @@
         state.panY = ptrY - worldY * state.zoom;
 
         applyStageTransform();
-        scheduleCrispRerender();
+        scheduleDetailRender();
       }
 
       function triggerTargetArrivalRing(focusNorm) {
@@ -4028,6 +4281,7 @@
           state.panStartClientY = e.clientY;
           state.panOriginX = state.panX;
           state.panOriginY = state.panY;
+          setStageGestureWillChange(true);
           vp.style.cursor = 'grabbing';
         });
 
@@ -4074,7 +4328,9 @@
 
           if (state.isPanning) {
             state.isPanning = false;
+            setStageGestureWillChange(false);
             vp.style.cursor = state.addLinkMode ? 'crosshair' : 'grab';
+            scheduleDetailRender();
           }
         };
 
@@ -4082,7 +4338,9 @@
         vp.addEventListener('mouseleave', () => {
           if (state.isPanning) {
             state.isPanning = false;
+            setStageGestureWillChange(false);
             vp.style.cursor = state.addLinkMode ? 'crosshair' : 'grab';
+            scheduleDetailRender();
           }
         });
 
@@ -4090,7 +4348,8 @@
           'wheel',
           (e) => {
             e.preventDefault();
-            const factor = e.deltaY < 0 ? 1.16 : 1 / 1.16;
+            setStageGestureWillChange(true);
+            const factor = e.deltaY < 0 ? 1.18 : 1 / 1.18;
             zoomAtClientPoint(state.zoom * factor, e.clientX, e.clientY);
           },
           { passive: false }
@@ -4105,6 +4364,7 @@
               state.isPanning = false;
               state.isDrawingLink = false;
               rubberband.classList.add('hidden');
+              setStageGestureWillChange(true);
               const dx = e.touches[0].clientX - e.touches[1].clientX;
               const dy = e.touches[0].clientY - e.touches[1].clientY;
               state.pinchStartDist = Math.hypot(dx, dy);
@@ -4123,6 +4383,7 @@
                 rubberband.classList.remove('hidden');
               } else {
                 state.isPanning = true;
+                setStageGestureWillChange(true);
                 state.panStartClientX = t.clientX;
                 state.panStartClientY = t.clientY;
                 state.panOriginX = state.panX;
@@ -4192,6 +4453,8 @@
           if (e.touches.length === 0) {
             state.isPanning = false;
             state.pinchStartDist = 0;
+            setStageGestureWillChange(false);
+            scheduleDetailRender();
           }
         });
       }
@@ -4204,26 +4467,26 @@
           switchDrawerTab(state.activeDrawerTab);
           document.getElementById('sheetDrawerOverlay').classList.remove('hidden');
         };
-        const closeDrawer = () => {
-          document.getElementById('sheetDrawerOverlay').classList.add('hidden');
-        };
+        const closeDrawer = () => document.getElementById('sheetDrawerOverlay').classList.add('hidden');
 
         document.getElementById('openSheetDrawerBtn').addEventListener('click', openDrawer);
         document.getElementById('activeSheetPillBtn').addEventListener('click', openDrawer);
         document.getElementById('closeSheetDrawerBtn').addEventListener('click', closeDrawer);
         document.getElementById('sheetDrawerBackdropClick').addEventListener('click', closeDrawer);
-        document.getElementById('sheetSearchInput').addEventListener('input', renderSheetDrawerList);
 
         document.querySelectorAll('.drawer-tab-btn').forEach((btn) => {
           btn.addEventListener('click', () => switchDrawerTab(btn.dataset.drawerTab));
         });
 
+        document.getElementById('sheetSearchInput').addEventListener('input', renderSheetDrawerList);
+
         document.getElementById('drawerLoadSampleBtn').addEventListener('click', async () => {
           closeDrawer();
           await activateDrawingSet(createSampleVectorSet(), 0);
+          showToast('Loaded 4-Sheet Commercial Sample Set.', 'info');
         });
 
-        // Multi-page Prev / Next buttons
+        // Multi-page prev/next steppers
         document.getElementById('prevPageBtn').addEventListener('click', async () => {
           if (!state.activeSet || state.activeSheetIndex <= 0) return;
           state.activeSheetIndex--;
@@ -4235,30 +4498,65 @@
           await renderCurrentSheet({ fitToScreen: true });
         });
 
-        // Back History Pill
+        // Navigation History Back Button
         document.getElementById('backHistoryPillBtn').addEventListener('click', navigateBackHistory);
 
-        // Zoom Controls
+        // Zoom Controls & Presets (Up to 1000% / 10x Zoom)
         document.getElementById('zoomInBtn').addEventListener('click', () => {
           const vp = document.getElementById('canvasViewport').getBoundingClientRect();
-          zoomAtClientPoint(state.zoom * 1.25, vp.left + vp.width / 2, vp.top + vp.height / 2);
+          zoomAtClientPoint(state.zoom * 1.3, vp.left + vp.width / 2, vp.top + vp.height / 2);
         });
 
         document.getElementById('zoomOutBtn').addEventListener('click', () => {
           const vp = document.getElementById('canvasViewport').getBoundingClientRect();
-          zoomAtClientPoint(state.zoom / 1.25, vp.left + vp.width / 2, vp.top + vp.height / 2);
+          zoomAtClientPoint(state.zoom / 1.3, vp.left + vp.width / 2, vp.top + vp.height / 2);
         });
 
         document.getElementById('zoomTogglePresetBtn').addEventListener('click', () => {
           const vp = document.getElementById('canvasViewport').getBoundingClientRect();
-          const target = Math.abs(state.zoom - 1.0) < 0.08 ? 2.0 : 1.0;
+          let target = 1.0;
+          if (state.zoom < 1.8) target = 2.0;
+          else if (state.zoom < 3.5) target = 4.0;
+          else target = 1.0;
           zoomAtClientPoint(target, vp.left + vp.width / 2, vp.top + vp.height / 2);
         });
 
         document.getElementById('zoomFitBtn').addEventListener('click', () => {
+          clearDetailOverlayCanvas();
           computeFitZoomAndPan();
           applyStageTransform();
-          scheduleCrispRerender();
+          scheduleDetailRender();
+        });
+
+        document.getElementById('zoom100Btn')?.addEventListener('click', () => {
+          const vp = document.getElementById('canvasViewport').getBoundingClientRect();
+          zoomAtClientPoint(1.0, vp.left + vp.width / 2, vp.top + vp.height / 2);
+        });
+
+        document.getElementById('zoom200Btn')?.addEventListener('click', () => {
+          const vp = document.getElementById('canvasViewport').getBoundingClientRect();
+          zoomAtClientPoint(2.0, vp.left + vp.width / 2, vp.top + vp.height / 2);
+        });
+
+        document.getElementById('zoom400Btn')?.addEventListener('click', () => {
+          const vp = document.getElementById('canvasViewport').getBoundingClientRect();
+          zoomAtClientPoint(4.0, vp.left + vp.width / 2, vp.top + vp.height / 2);
+        });
+
+        // HD Vector Supersampling Quality Selector (1.25x -> 1.75x -> 2.25x)
+        updateHdQualityButtonUI();
+        document.getElementById('hdQualityToggleBtn')?.addEventListener('click', () => {
+          if (state.qualityMultiplier < 1.5) {
+            state.qualityMultiplier = 1.75;
+          } else if (state.qualityMultiplier < 2.0) {
+            state.qualityMultiplier = 2.25;
+          } else {
+            state.qualityMultiplier = 1.25;
+          }
+          SafeStorage.set('prodraw_hd_quality_mult', String(state.qualityMultiplier));
+          updateHdQualityButtonUI();
+          showToast(`Vector rendering quality set to ${document.getElementById('hdQualityLabel').textContent}`, 'info', 2000);
+          renderCurrentSheet({ fitToScreen: false }).catch(() => {});
         });
 
         // Add Callout Link Mode Toggle
@@ -4610,16 +4908,29 @@
           } else if (e.key === '=' || e.key === '+') {
             e.preventDefault();
             const vp = document.getElementById('canvasViewport').getBoundingClientRect();
-            zoomAtClientPoint(state.zoom * 1.25, vp.left + vp.width / 2, vp.top + vp.height / 2);
+            zoomAtClientPoint(state.zoom * 1.3, vp.left + vp.width / 2, vp.top + vp.height / 2);
           } else if (e.key === '-' || e.key === '_') {
             e.preventDefault();
             const vp = document.getElementById('canvasViewport').getBoundingClientRect();
-            zoomAtClientPoint(state.zoom / 1.25, vp.left + vp.width / 2, vp.top + vp.height / 2);
+            zoomAtClientPoint(state.zoom / 1.3, vp.left + vp.width / 2, vp.top + vp.height / 2);
           } else if (e.key === '0') {
             e.preventDefault();
+            clearDetailOverlayCanvas();
             computeFitZoomAndPan();
             applyStageTransform();
-            scheduleCrispRerender();
+            scheduleDetailRender();
+          } else if (e.key === '1') {
+            e.preventDefault();
+            const vp = document.getElementById('canvasViewport').getBoundingClientRect();
+            zoomAtClientPoint(1.0, vp.left + vp.width / 2, vp.top + vp.height / 2);
+          } else if (e.key === '2') {
+            e.preventDefault();
+            const vp = document.getElementById('canvasViewport').getBoundingClientRect();
+            zoomAtClientPoint(2.0, vp.left + vp.width / 2, vp.top + vp.height / 2);
+          } else if (e.key === '4') {
+            e.preventDefault();
+            const vp = document.getElementById('canvasViewport').getBoundingClientRect();
+            zoomAtClientPoint(4.0, vp.left + vp.width / 2, vp.top + vp.height / 2);
           } else if (e.key === 'Escape') {
             setAddLinkMode(false);
             closeCalloutModal();
