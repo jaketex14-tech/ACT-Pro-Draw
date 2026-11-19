@@ -63,7 +63,7 @@
       -webkit-user-select: none;
     }
 
-    /* Procore-style compact translucent callout hotspots (~20% width, ~50% height of previous) */
+    /* Procore-style compact translucent callout hotspots */
     .callout-badge {
       position: absolute;
       width: 0.018px; /* scaled dynamically in JS */
@@ -619,7 +619,7 @@
         </div>
         <button id="disconnectDbxBtn" type="button"
           class="hidden mb-1 px-2.5 py-1 rounded-lg bg-rose-100 hover:bg-rose-200 text-rose-800 text-[11px] font-bold border border-rose-300">
-          Disconnect
+          Disconnect Device
         </button>
       </div>
 
@@ -627,7 +627,7 @@
       <div id="modalPanelDropbox" class="flex-1 flex flex-col min-h-0 overflow-hidden">
         <div id="dbxAuthSetupSection" class="p-3.5 bg-slate-50 border-b border-slate-200 space-y-3 text-xs overflow-y-auto max-h-[55vh] shrink-0">
           <div class="flex items-center justify-between gap-2 flex-wrap">
-            <div class="font-bold text-slate-900">Dropbox Read-Only Connection (PKCE)</div>
+            <div class="font-bold text-slate-900">Dropbox Read-Only Connection (PKCE + Multi-Device Cloud Sync)</div>
           </div>
 
           <div>
@@ -676,19 +676,19 @@
             </div>
           </div>
 
-          <!-- Supabase Shared Callout Overlays Backend Setup -->
+          <!-- Supabase Shared Overlays & Multi-Device Dropbox Sync Backend -->
           <div class="p-3 rounded-xl bg-white border border-emerald-300 space-y-2">
             <div class="flex items-center justify-between gap-2 flex-wrap">
               <div class="flex items-center gap-1.5">
                 <span id="sbStatusDot" class="w-2 h-2 rounded-full bg-slate-400"></span>
-                <span class="font-bold text-slate-900">Supabase Shared Overlays Backend</span>
+                <span class="font-bold text-slate-900">Supabase Cloud Sync (Overlays + Multi-Device Login)</span>
               </div>
               <span id="sbStatusText" class="text-[10px] font-mono text-slate-500">Local Only</span>
             </div>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <input id="sbUrlInput" type="text" placeholder="https://vvrhtbhpzkvslwqrhsam.supabase.co"
+              <input id="sbUrlInput" type="text" placeholder="Supabase URL (https://xxxx.supabase.co)"
                 class="w-full px-2.5 py-1.5 font-mono text-[11px] bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-              <input id="sbAnonKeyInput" type="password" placeholder="sb_publishable_RnNFl0h-qmZOqoSFJgvO8w_kmzbv9zk"
+              <input id="sbAnonKeyInput" type="password" placeholder="Supabase Publishable / Anon Key"
                 class="w-full px-2.5 py-1.5 font-mono text-[11px] bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500" />
             </div>
             <div class="flex items-center justify-between gap-2 flex-wrap">
@@ -699,11 +699,11 @@
               <div class="flex items-center gap-1.5">
                 <button id="disconnectSupabaseBtn" type="button"
                   class="hidden px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[11px] font-semibold transition">
-                  Clear
+                  Clear Local Override
                 </button>
                 <button id="saveTestSupabaseBtn" type="button"
                   class="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold transition">
-                  Save &amp; Sync Overlays
+                  Save &amp; Sync Now
                 </button>
               </div>
             </div>
@@ -741,16 +741,19 @@
       // ---------------------------------------------------------------------
       const DROPBOX_SCOPES = 'files.metadata.read files.content.read sharing.read account_info.read';
 
-      // Set a permanent Dropbox folder path here (e.g. '/Current Jobs') to hard-lock all users
-      // strictly inside that folder and its subfolders so they can never browse elsewhere:
+      // Permanent Dropbox root folder path — restricts browsing strictly inside this folder
       const HARDCODED_DROPBOX_ROOT_PATH = '/Current Jobs';
 
-      // Optional: Hardcode your Supabase project credentials here so all users share overlays automatically
-      const HARDCODED_SUPABASE_URL = '';
-      const HARDCODED_SUPABASE_ANON_KEY = '';
-      const SUPABASE_LINKS_TABLE = 'blueprint_callout_links';
+      // Hardcoded Supabase credentials for automatic multi-device overlay & Dropbox login sync
+      const HARDCODED_SUPABASE_URL = 'https://vvrhtbhpzkvslwqrhsam.supabase.co';
+      const HARDCODED_SUPABASE_ANON_KEY = 'sb_publishable_RnNFl0h-qmZOqoSFJgvO8w_kmzbv9zk';
 
-      const SUPABASE_SETUP_SQL = `create table if not exists public.blueprint_callout_links (
+      const SUPABASE_LINKS_TABLE = 'blueprint_callout_links';
+      const SUPABASE_DBX_CONFIG_TABLE = 'dropbox_sync_config';
+      const SUPABASE_DBX_CONFIG_ID = 'default_workspace';
+
+      const SUPABASE_SETUP_SQL = `-- 1. Shared Callout Overlays
+create table if not exists public.blueprint_callout_links (
   id text primary key,
   source_doc_id text not null,
   source_path text,
@@ -760,7 +763,7 @@
   target_doc_name text not null,
   target_page integer not null default 1,
   label text not null,
-  detail_title text default '',
+  detail_title text not null default '',
   color text not null default 'blue',
   x double precision not null,
   y double precision not null,
@@ -770,12 +773,33 @@
 );
 
 create index if not exists idx_blueprint_callout_source
-  on public.blueprint_callout_links (source_doc_id);
+  on public.blueprint_callout_links (source_doc_id, source_page);
 
 alter table public.blueprint_callout_links enable row level security;
 
+drop policy if exists "Allow blueprint link access" on public.blueprint_callout_links;
 create policy "Allow blueprint link access"
   on public.blueprint_callout_links
+  for all
+  using (true)
+  with check (true);
+
+-- 2. Shared Dropbox Sync Config (Multi-Device Auto-Login)
+create table if not exists public.dropbox_sync_config (
+  id text primary key,
+  client_id text not null,
+  access_token text not null default '',
+  refresh_token text not null default '',
+  expires_at bigint,
+  locked_root_path text not null default '',
+  updated_at timestamptz not null default now()
+);
+
+alter table public.dropbox_sync_config enable row level security;
+
+drop policy if exists "Allow dropbox sync config access" on public.dropbox_sync_config;
+create policy "Allow dropbox sync config access"
+  on public.dropbox_sync_config
   for all
   using (true)
   with check (true);`;
@@ -1015,7 +1039,7 @@ create policy "Allow blueprint link access"
       };
 
       // ---------------------------------------------------------------------
-      // 3B. SUPABASE SHARED CALLOUT OVERLAYS SERVICE (REST API)
+      // 3B. SUPABASE SHARED OVERLAYS & MULTI-DEVICE DROPBOX SYNC SERVICE
       // ---------------------------------------------------------------------
       const SupabaseLinkService = {
         getUrl() {
@@ -1077,7 +1101,7 @@ create policy "Allow blueprint link access"
           };
         },
         async testConnection() {
-          if (!this.isConfigured()) throw new Error('Enter both Supabase URL and Anon Key.');
+          if (!this.isConfigured()) throw new Error('Enter both Supabase URL and Key.');
           const res = await fetch(`${this.getUrl()}/rest/v1/${SUPABASE_LINKS_TABLE}?select=id&limit=1`, {
             headers: this.headers()
           });
@@ -1120,6 +1144,39 @@ create policy "Allow blueprint link access"
           const res = await fetch(url, { method: 'DELETE', headers: this.headers() });
           if (!res.ok) throw new Error(`Supabase delete failed (${res.status})`);
           return true;
+        },
+
+        // Multi-device Dropbox OAuth Sync Config Table methods
+        async fetchDropboxSyncConfig() {
+          if (!this.isConfigured() || !navigator.onLine) return null;
+          const url = `${this.getUrl()}/rest/v1/${SUPABASE_DBX_CONFIG_TABLE}?id=eq.${encodeURIComponent(SUPABASE_DBX_CONFIG_ID)}&select=*`;
+          const res = await fetch(url, { headers: this.headers() });
+          if (!res.ok) return null;
+          const rows = await res.json();
+          return Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
+        },
+        async saveDropboxSyncConfig({ clientId, accessToken, refreshToken, expiresAt, lockedRootPath }) {
+          if (!this.isConfigured() || !navigator.onLine) return false;
+          if (!clientId || (!accessToken && !refreshToken)) return false;
+          const payload = {
+            id: SUPABASE_DBX_CONFIG_ID,
+            client_id: String(clientId),
+            access_token: String(accessToken || ''),
+            refresh_token: String(refreshToken || ''),
+            expires_at: Number(expiresAt) || null,
+            locked_root_path: String(lockedRootPath || ''),
+            updated_at: new Date().toISOString()
+          };
+          const res = await fetch(`${this.getUrl()}/rest/v1/${SUPABASE_DBX_CONFIG_TABLE}`, {
+            method: 'POST',
+            headers: this.headers({ Prefer: 'resolution=merge-duplicates,return=minimal' }),
+            body: JSON.stringify(payload)
+          });
+          if (!res.ok) {
+            const msg = await res.text();
+            throw new Error(`Dropbox cloud sync save failed (${res.status}): ${msg}`);
+          }
+          return true;
         }
       };
 
@@ -1137,7 +1194,11 @@ create policy "Allow blueprint link access"
           dot?.classList.remove('bg-slate-400');
           dot?.classList.add('bg-emerald-500');
           if (txt) txt.textContent = navigator.onLine ? 'Supabase Live Sync' : 'Offline Cache Mode';
-          clearBtn?.classList.remove('hidden');
+          if (SafeStorage.get('prodraw_sb_url', '') || SafeStorage.get('prodraw_sb_key', '')) {
+            clearBtn?.classList.remove('hidden');
+          } else {
+            clearBtn?.classList.add('hidden');
+          }
         } else {
           dot?.classList.remove('bg-emerald-500');
           dot?.classList.add('bg-slate-400');
@@ -1375,12 +1436,13 @@ create policy "Allow blueprint link access"
       }
 
       // ---------------------------------------------------------------------
-      // 6. DROPBOX API SERVICE & OAUTH PKCE
+      // 6. DROPBOX API SERVICE, PKCE OAUTH & SUPABASE MULTI-DEVICE SYNC
       // ---------------------------------------------------------------------
       const DropboxService = {
         getAccessToken() { return SafeStorage.get('prodraw_dbx_access', ''); },
         getRefreshToken() { return SafeStorage.get('prodraw_dbx_refresh', ''); },
         getClientId() { return SafeStorage.get('prodraw_dbx_client_id', '').trim(); },
+        getExpiresAt() { return Number(SafeStorage.get('prodraw_dbx_expires_at', '0')) || 0; },
         isAppFolderRestricted() { return SafeStorage.get('prodraw_dbx_app_restricted', '') === 'true'; },
         isConnected() { return Boolean(this.getAccessToken() || this.getRefreshToken()); },
 
@@ -1410,6 +1472,44 @@ create policy "Allow blueprint link access"
             banner.textContent = msg;
             banner.classList.remove('hidden');
           }
+        },
+
+        async pullTokensFromSupabase(onlyIfNewer = false) {
+          if (!SupabaseLinkService.isConfigured() || !navigator.onLine) return false;
+          const cfg = await SupabaseLinkService.fetchDropboxSyncConfig();
+          if (!cfg || !cfg.client_id || (!cfg.access_token && !cfg.refresh_token)) return false;
+
+          const remoteExpires = Number(cfg.expires_at) || 0;
+          const localExpires = this.getExpiresAt();
+          const hasLocalCreds = Boolean(this.getClientId() && this.getRefreshToken() && this.getAccessToken());
+
+          if (onlyIfNewer && hasLocalCreds && localExpires >= remoteExpires) {
+            return false;
+          }
+
+          SafeStorage.set('prodraw_dbx_client_id', String(cfg.client_id).trim());
+          if (cfg.access_token) SafeStorage.set('prodraw_dbx_access', String(cfg.access_token));
+          if (cfg.refresh_token) SafeStorage.set('prodraw_dbx_refresh', String(cfg.refresh_token));
+          if (remoteExpires) SafeStorage.set('prodraw_dbx_expires_at', String(remoteExpires));
+
+          updateDropboxConnectionUI();
+          return true;
+        },
+
+        async pushTokensToSupabase() {
+          if (!SupabaseLinkService.isConfigured() || !navigator.onLine) return false;
+          const clientId = this.getClientId();
+          const accessToken = this.getAccessToken();
+          const refreshToken = this.getRefreshToken();
+          if (!clientId || (!accessToken && !refreshToken)) return false;
+
+          return await SupabaseLinkService.saveDropboxSyncConfig({
+            clientId,
+            accessToken,
+            refreshToken,
+            expiresAt: this.getExpiresAt() || (Date.now() + 14400 * 1000),
+            lockedRootPath: getLockedRootPath()
+          });
         },
 
         async startDirectCodeFlow() {
@@ -1504,13 +1604,28 @@ create policy "Allow blueprint link access"
               throw new Error(data.error_description || data.error || `Token exchange failed (${res.status})`);
             }
 
+            const expiresAt = Date.now() + ((Number(data.expires_in) || 14400) * 1000);
+            SafeStorage.set('prodraw_dbx_client_id', clientId);
             SafeStorage.set('prodraw_dbx_access', data.access_token);
+            SafeStorage.set('prodraw_dbx_expires_at', String(expiresAt));
             if (data.refresh_token) SafeStorage.set('prodraw_dbx_refresh', data.refresh_token);
             SafeStorage.remove('prodraw_dbx_pkce_verifier');
             SafeStorage.remove('prodraw_dbx_used_redirect');
 
+            let syncedCloud = false;
+            try {
+              syncedCloud = await this.pushTokensToSupabase();
+            } catch (syncErr) {
+              showToast(`Connected locally (Supabase sync warning: ${syncErr.message})`, 'warning', 4500);
+            }
+
             updateDropboxConnectionUI();
-            showToast('Connected to Dropbox!', 'success');
+            showToast(
+              syncedCloud
+                ? 'Connected to Dropbox & synced login to Supabase for all devices!'
+                : 'Connected to Dropbox!',
+              'success'
+            );
             document.getElementById('dbxAuthSetupSection')?.classList.add('hidden');
             const startFolder = clampToLockedRoot('');
             await loadDropboxFolder(startFolder, null);
@@ -1543,23 +1658,48 @@ create policy "Allow blueprint link access"
           }
         },
 
+        // Clears only this device's local session so other devices stay connected
         disconnect() {
           SafeStorage.remove('prodraw_dbx_access');
           SafeStorage.remove('prodraw_dbx_refresh');
+          SafeStorage.remove('prodraw_dbx_expires_at');
           SafeStorage.remove('prodraw_dbx_pkce_verifier');
           state.dbxEntries = [];
           state.dbxPath = clampToLockedRoot('');
           updateDropboxConnectionUI();
           renderDropboxEntries();
-          showToast('Disconnected from Dropbox.', 'info');
+          showToast('Disconnected Dropbox on this device.', 'info');
         },
 
-        async ensureValidAccessToken() {
+        async ensureValidAccessToken(forceRefresh = false) {
           let token = this.getAccessToken();
-          if (token) return token;
+          const expiresAt = this.getExpiresAt();
+          const isExpired = expiresAt > 0 && Date.now() >= (expiresAt - 120000);
+
+          if (!forceRefresh && token && !isExpired) {
+            return token;
+          }
+
+          // Check if Supabase already has a fresher token from another device
+          if (SupabaseLinkService.isConfigured() && navigator.onLine) {
+            try {
+              const pulled = await this.pullTokensFromSupabase(true);
+              if (pulled) {
+                token = this.getAccessToken();
+                const updatedExp = this.getExpiresAt();
+                if (!forceRefresh && token && (!updatedExp || Date.now() < updatedExp - 120000)) {
+                  return token;
+                }
+              }
+            } catch {}
+          }
+
           const refresh = this.getRefreshToken();
           const clientId = this.getClientId();
-          if (!refresh || !clientId) throw new Error('Not connected to Dropbox. Click "Connect Setup" above.');
+          if (!refresh || !clientId) {
+            if (token && !forceRefresh) return token;
+            throw new Error('Not connected to Dropbox. Click "Connect Setup" above.');
+          }
 
           const res = await fetch('https://api.dropbox.com/oauth2/token', {
             method: 'POST',
@@ -1570,27 +1710,41 @@ create policy "Allow blueprint link access"
               client_id: clientId
             })
           });
-          if (!res.ok) throw new Error('Failed to refresh Dropbox token.');
+          if (!res.ok) {
+            throw new Error('Failed to refresh Dropbox token. Please reconnect in Connect Setup.');
+          }
+
           const data = await res.json();
+          const nextExpiresAt = Date.now() + ((Number(data.expires_in) || 14400) * 1000);
           SafeStorage.set('prodraw_dbx_access', data.access_token);
+          SafeStorage.set('prodraw_dbx_expires_at', String(nextExpiresAt));
+          if (data.refresh_token) SafeStorage.set('prodraw_dbx_refresh', data.refresh_token);
+
+          // Persist refreshed access token back to Supabase for all other devices
+          this.pushTokensToSupabase().catch(() => {});
           return data.access_token;
         },
 
         async listFolder(path = '', namespaceId = null) {
           const root = getLockedRootPath();
           if (root) path = clampToLockedRoot(path);
-          const token = await this.ensureValidAccessToken();
+          let token = await this.ensureValidAccessToken(false);
 
-          const doFetch = async (targetPath) => fetch('https://api.dropboxapi.com/2/files/list_folder', {
+          const doFetch = async (tok, targetPath) => fetch('https://api.dropboxapi.com/2/files/list_folder', {
             method: 'POST',
             headers: {
-              Authorization: `Bearer ${token}`,
+              Authorization: `Bearer ${tok}`,
               'Content-Type': 'application/json'
             },
             body: JSON.stringify({ path: targetPath, include_mounted_folders: true })
           });
 
-          let res = await doFetch(path);
+          let res = await doFetch(token, path);
+          if (res.status === 401) {
+            token = await this.ensureValidAccessToken(true);
+            res = await doFetch(token, path);
+          }
+
           let raw = await res.text();
           let data = {};
           try { data = JSON.parse(raw); } catch { data = { error_summary: raw }; }
@@ -1620,7 +1774,7 @@ create policy "Allow blueprint link access"
         async listSharedFolders() {
           if (getLockedRootPath()) return [];
           try {
-            const token = await this.ensureValidAccessToken();
+            const token = await this.ensureValidAccessToken(false);
             const res = await fetch('https://api.dropboxapi.com/2/sharing/list_folders', {
               method: 'POST',
               headers: {
@@ -1638,14 +1792,21 @@ create policy "Allow blueprint link access"
         },
 
         async downloadFile(path, namespaceId = null) {
-          const token = await this.ensureValidAccessToken();
-          const res = await fetch('https://content.dropboxapi.com/2/files/download', {
+          let token = await this.ensureValidAccessToken(false);
+          const doDownload = async (tok) => fetch('https://content.dropboxapi.com/2/files/download', {
             method: 'POST',
             headers: {
-              Authorization: `Bearer ${token}`,
+              Authorization: `Bearer ${tok}`,
               'Dropbox-API-Arg': JSON.stringify({ path })
             }
           });
+
+          let res = await doDownload(token);
+          if (res.status === 401) {
+            token = await this.ensureValidAccessToken(true);
+            res = await doDownload(token);
+          }
+
           if (!res.ok) throw new Error(`Dropbox download failed (${res.status})`);
           return await res.arrayBuffer();
         }
@@ -1667,14 +1828,22 @@ create policy "Allow blueprint link access"
         if (getLockedRootPath()) quickRow?.classList.add('hidden');
 
         if (connected) {
-          dot1?.classList.replace('bg-amber-300', 'bg-emerald-400');
-          dot2?.classList.replace('bg-amber-400', 'bg-emerald-400');
-          if (sub) sub.textContent = 'Connected (Read-Only)';
+          dot1?.classList.remove('bg-amber-300');
+          dot1?.classList.add('bg-emerald-400');
+          dot2?.classList.remove('bg-amber-400');
+          dot2?.classList.add('bg-emerald-400');
+          if (sub) {
+            sub.textContent = SupabaseLinkService.isConfigured()
+              ? 'Connected (Read-Only • Cloud Synced)'
+              : 'Connected (Read-Only)';
+          }
           discBtn?.classList.remove('hidden');
           setupSec?.classList.add('hidden');
         } else {
-          dot1?.classList.replace('bg-emerald-400', 'bg-amber-300');
-          dot2?.classList.replace('bg-emerald-400', 'bg-amber-400');
+          dot1?.classList.remove('bg-emerald-400');
+          dot1?.classList.add('bg-amber-300');
+          dot2?.classList.remove('bg-emerald-400');
+          dot2?.classList.add('bg-amber-400');
           if (sub) sub.textContent = 'Not Connected • Enter App Key below';
           discBtn?.classList.add('hidden');
           setupSec?.classList.remove('hidden');
@@ -1704,7 +1873,7 @@ create policy "Allow blueprint link access"
             crumbBar.appendChild(rootBtn);
           }
 
-          parts.forEach((seg, idx) => {
+          parts.forEach((seg) => {
             running += '/' + seg;
             const segPath = running;
             if (lockedRoot && segPath.toLowerCase().length < lockedRoot.toLowerCase().length) return;
@@ -2681,15 +2850,15 @@ create policy "Allow blueprint link access"
           DropboxService.disconnect();
         });
 
-        // Supabase Backend Setup Controls
+        // Supabase Backend Setup & Sync Controls
         document.getElementById('copySupabaseSqlBtn')?.addEventListener('click', () => {
-          copyTextToClipboard(SUPABASE_SETUP_SQL, 'Supabase Table SQL copied! Paste into your SQL Editor.');
+          copyTextToClipboard(SUPABASE_SETUP_SQL, 'Supabase SQL (Overlays + Multi-Device Sync) copied!');
         });
         document.getElementById('saveTestSupabaseBtn')?.addEventListener('click', async () => {
           const urlVal = (document.getElementById('sbUrlInput')?.value || '').trim().replace(/\/+$/, '');
           const keyVal = (document.getElementById('sbAnonKeyInput')?.value || '').trim();
           if (!urlVal || !keyVal) {
-            showToast('Enter both Supabase Project URL and Anon Public Key.', 'warning');
+            showToast('Enter both Supabase Project URL and Publishable/Anon Key.', 'warning');
             return;
           }
           SafeStorage.set('prodraw_sb_url', urlVal);
@@ -2704,7 +2873,24 @@ create policy "Allow blueprint link access"
               renderLinksDrawerList();
               updateHeaderBar();
             }
-            showToast(`Connected to Supabase! Synced ${remoteLinks ? remoteLinks.length : 0} shared callout(s).`, 'success');
+
+            // Bidirectional Dropbox login sync with Supabase
+            let dbxSyncNote = '';
+            if (!DropboxService.isConnected()) {
+              const pulled = await DropboxService.pullTokensFromSupabase(false).catch(() => false);
+              if (pulled) {
+                dbxSyncNote = ' & loaded shared Dropbox login!';
+                loadDropboxFolder(clampToLockedRoot(''), null);
+              }
+            } else {
+              const pushed = await DropboxService.pushTokensToSupabase().catch(() => false);
+              if (pushed) dbxSyncNote = ' & synced Dropbox login to cloud!';
+            }
+
+            showToast(
+              `Connected to Supabase! Synced ${remoteLinks ? remoteLinks.length : 0} callout(s)${dbxSyncNote}`,
+              'success'
+            );
           } catch (err) {
             showToast(err.message, 'error', 5000);
           }
@@ -2714,10 +2900,10 @@ create policy "Allow blueprint link access"
           SafeStorage.remove('prodraw_sb_key');
           const u = document.getElementById('sbUrlInput');
           const k = document.getElementById('sbAnonKeyInput');
-          if (u) u.value = '';
-          if (k) k.value = '';
+          if (u) u.value = HARDCODED_SUPABASE_URL;
+          if (k) k.value = HARDCODED_SUPABASE_ANON_KEY;
           updateSupabaseStatusUI();
-          showToast('Supabase settings cleared (using local storage only).', 'info');
+          showToast('Local Supabase override cleared.', 'info');
         });
 
         // Optional Native Device Folder Link Button
@@ -3068,7 +3254,12 @@ create policy "Allow blueprint link access"
           }
         });
 
+        // Handle redirect OAuth callback first if returning from Dropbox
+        await DropboxService.handleOAuthCallbackOnBoot();
+
+        // Sync shared overlays & multi-device Dropbox credentials from Supabase
         if (SupabaseLinkService.isConfigured() && navigator.onLine) {
+          // 1. Sync shared callout links in background
           SupabaseLinkService.fetchAllLinks()
             .then((allLinks) => {
               if (Array.isArray(allLinks)) {
@@ -3079,9 +3270,32 @@ create policy "Allow blueprint link access"
               }
             })
             .catch(() => {});
+
+          // 2. Sync Dropbox credentials across devices
+          try {
+            if (!DropboxService.isConnected()) {
+              const pulled = await DropboxService.pullTokensFromSupabase(false);
+              if (pulled) {
+                showToast('Dropbox synced automatically from Supabase!', 'success', 2800);
+              }
+            } else {
+              // If already logged in on this device, check for newer cloud token or upload if cloud is empty
+              const cloudCfg = await SupabaseLinkService.fetchDropboxSyncConfig();
+              if (!cloudCfg || (!cloudCfg.access_token && !cloudCfg.refresh_token)) {
+                await DropboxService.pushTokensToSupabase().catch(() => {});
+              } else {
+                await DropboxService.pullTokensFromSupabase(true);
+              }
+            }
+          } catch {}
         }
 
-        await DropboxService.handleOAuthCallbackOnBoot();
+        updateDropboxConnectionUI();
+
+        // Pre-load locked Dropbox root folder silently so project drawings are ready immediately
+        if (DropboxService.isConnected() && navigator.onLine) {
+          loadDropboxFolder(clampToLockedRoot(''), null).catch(() => {});
+        }
 
         await renderActivePageBase(true);
         renderLinksDrawerList();
